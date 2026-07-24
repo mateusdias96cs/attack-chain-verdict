@@ -1,0 +1,37 @@
+# Python virtual environment
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Environment variables
+.env
+
+# Test warehouse (DuckDB) + pytest
+.duckdb_tmp/
+.pytest_cache/
+
+# silver_agent — cache de mapeamento aprendido em runtime
+silver_agent/.mapping_cache.json
+
+# ── Datasets brutos (grandes; não versionar) ──
+dadosdia1.json
+dadosdia2.json
+
+# ── Bundles STIX do ATT&CK (grandes; baixáveis/regeneráveis) ──
+enterprise-attack-stix/
+
+# ── Índice vetorial ChromaDB (binário grande; regenerável via mitre-rag/ingest.py) ──
+chroma_db/
+chroma_db.bak_techonly/
+
+# ── Saídas/artefatos temporários ──
+*.tmp
+*.handoff.json
+
+# LangGraph dev runtime (não versionar)
+graph_app/.langgraph_api/

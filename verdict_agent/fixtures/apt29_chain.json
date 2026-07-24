@@ -1,0 +1,53 @@
+{
+  "entity": "SCRANTON/pbeesly",
+  "prior_chain_verdict": {
+    "verdict": "attack",
+    "plausibility": 0.9,
+    "likely_tactics": ["Execution", "Defense Evasion", "Command and Control"]
+  },
+  "events": [
+    {
+      "time": "02:55:56",
+      "raw": "SCRANTON/pbeesly process_create | C:\\ProgramData\\victim\\cod.3aka3.scr /S",
+      "silver": {
+        "event_category": "process_create",
+        "image_name": "cod.\u202e3aka3.scr",
+        "image_path": "C:\\ProgramData\\victim\\cod.\u202e3aka3.scr",
+        "command_line": "\"C:\\ProgramData\\victim\\cod.\u202e3aka3.scr\" /S",
+        "subject_account": "pbeesly"
+      }
+    },
+    {
+      "time": "02:55:59",
+      "raw": "SCRANTON/pbeesly network_connect cod.3aka3.scr | 192.168.0.5:1234",
+      "silver": {
+        "event_category": "network_connect",
+        "image_name": "cod.\u202e3aka3.scr",
+        "destination_ip": "192.168.0.5",
+        "destination_port": 1234,
+        "subject_account": "pbeesly"
+      }
+    },
+    {
+      "time": "02:56:04",
+      "raw": "SCRANTON/pbeesly process_create | C:\\Windows\\System32\\cmd.exe",
+      "silver": {
+        "event_category": "process_create",
+        "image_name": "cmd.exe",
+        "image_path": "C:\\Windows\\System32\\cmd.exe",
+        "command_line": "\"C:\\Windows\\System32\\cmd.exe\"",
+        "subject_account": "pbeesly"
+      }
+    },
+    {
+      "time": "02:56:14",
+      "raw": "SCRANTON/pbeesly process_create | powershell.exe -enc SQBFAFgA",
+      "silver": {
+        "event_category": "powershell_script_block",
+        "image_name": "powershell.exe",
+        "command_line": "powershell.exe -enc SQBFAFgAZQBjAHUAdABlAA==",
+        "subject_account": "pbeesly"
+      }
+    }
+  ]
+}

