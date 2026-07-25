@@ -17,9 +17,16 @@ Princípios herdados do pipeline:
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 from .schema import ChainVerdictReport
+
+# Retry de sobrecarga TRANSITÓRIA do servidor Gemini (503 UNAVAILABLE / "high demand",
+# 429 rate-limit momentâneo, 500). NÃO mascara erro persistente: re-lança após esgotar.
+_TRANSIENT_STATUS = {429, 500, 503}
+_MAX_TRIES = 6
+_BASE_BACKOFF = 4.0  # s; cresce exponencialmente (4, 8, 16, 32, 64)
 
 DEFAULT_MODEL = "gemini-flash-latest"
 
@@ -91,17 +98,36 @@ class GeminiVerdict:
         """Envia o prompt (cadeia + candidatos) e devolve o veredito estruturado."""
         self._ensure()
         from google.genai import types
+        from google.genai import errors as genai_errors
 
-        resp = self._client.models.generate_content(
-            model=self.model,
-            contents=user_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                temperature=0.0,
-                response_mime_type="application/json",
-                response_schema=ChainVerdictReport,
-            ),
+        cfg = types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            temperature=0.0,
+            response_mime_type="application/json",
+            response_schema=ChainVerdictReport,
         )
+        resp = None
+        for attempt in range(1, _MAX_TRIES + 1):
+            try:
+                resp = self._client.models.generate_content(
+                    model=self.model, contents=user_prompt, config=cfg)
+                break
+            except genai_errors.ServerError as e:  # 5xx / sobrecarga transitória
+                code = getattr(e, "code", None) or getattr(e, "status_code", None)
+                if code not in _TRANSIENT_STATUS or attempt == _MAX_TRIES:
+                    raise
+                wait = _BASE_BACKOFF * (2 ** (attempt - 1))
+                print(f"    ⚠️  Gemini {code} transitório (tentativa {attempt}/{_MAX_TRIES}); "
+                      f"aguardando {wait:.0f}s…", flush=True)
+                time.sleep(wait)
+            except genai_errors.ClientError as e:  # 4xx: 429 pode ser rate-limit momentâneo
+                code = getattr(e, "code", None) or getattr(e, "status_code", None)
+                if code not in _TRANSIENT_STATUS or attempt == _MAX_TRIES:
+                    raise
+                wait = _BASE_BACKOFF * (2 ** (attempt - 1))
+                print(f"    ⚠️  Gemini {code} transitório (tentativa {attempt}/{_MAX_TRIES}); "
+                      f"aguardando {wait:.0f}s…", flush=True)
+                time.sleep(wait)
         u = getattr(resp, "usage_metadata", None)
         if u is not None:
             self.last_usage = {
