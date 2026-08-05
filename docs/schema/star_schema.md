@@ -1,7 +1,7 @@
 # Star Schema — Windows Security Telemetry (Sysmon + Security + PowerShell + WFP)
 
 > Source: `dadosdia1.json` (196,081 records), `dadosdia2.json` (587,286 records) — NDJSON, MITRE ATT&CK
-> "dmevals" / APT29 evaluation dataset. Grounded in `/mnt/c/Users/Admin/agentecve/docs/data_profile.md`
+> "dmevals" / APT29 evaluation dataset. Grounded in `docs/data_profile.md`
 > and direct sampling of representative EventIDs (1, 3, 10, 11, 12, 13, 22, 23, 4688, 4624, 4663, 5156, 4104, 800).
 >
 > **Target layer:** Gold (dimensional mart) of a medallion lakehouse. Bronze = raw NDJSON as-is;

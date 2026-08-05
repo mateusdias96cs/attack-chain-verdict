@@ -1,4 +1,4 @@
-# agentecve
+# ATT&CK Chain Verdict
 
 Pipeline de quatro agentes que transforma telemetria bruta do Windows em um veredito de
 segurança estruturado, com a técnica MITRE ATT&CK atribuída a cada evento, um nível de
