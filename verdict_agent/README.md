@@ -2,7 +2,8 @@
 
 Fecha o pipeline: recebe tudo dos agentes anteriores e produz o **veredito final
 estruturado** (Pydantic). Para **cada evento da cadeia** decide qual técnica ATT&CK
-realmente se aplica, com **nível de confiança** e **justificativa curta**.
+realmente se aplica, com **nível de confiança** e **explicação**, e apresenta o
+conjunto como uma **cadeia de ataque numerada e narrada**.
 
 ## O que entra e o que sai
 
@@ -12,11 +13,43 @@ ATT&CK que o **Agente 3 (RAG)** recuperou para cada evento.
 **Saída** (`schema.py`, validada via `response_schema` do Gemini):
 
 ```python
-EventVerdict(event, attack_id, technique_name, confidence, confidence_level, rationale)
+EventVerdict(event, step_title, attack_id, technique_name, tactic,
+             confidence, confidence_level, rationale)
 ChainVerdictReport(entity, overall_verdict, overall_confidence, events[], attack_summary)
 ```
 
-Ou seja, por evento: **(evento, técnica atribuída, nível de confiança, justificativa)**.
+Por passo da cadeia: um **título** que nomeia a ação do atacante e o artefato envolvido,
+a **técnica** atribuída, a **fase** da cadeia, o **nível de confiança** e uma
+**explicação em prosa** de 2 a 3 frases.
+
+O `tactic` não vem do modelo. Ele é preenchido deterministicamente a partir do
+metadado do candidato que o Agente 3 recuperou, pelo mesmo motivo da trava de
+grounding: a fase da cadeia é fato do ATT&CK, não opinião do modelo.
+
+## Formato do relatório
+
+A saída legível é uma **cadeia de ataque numerada**, escrita para quem não conhece o
+ATT&CK. Cada passo abre com o que o atacante fez, explica em texto corrido e só então
+mostra os dados técnicos:
+
+```
+  1º  Execução do arquivo mascarado cod.3aka3.scr
+      O arquivo usa um caractere que inverte a leitura do nome, fazendo um
+      executável parecer um documento comum. Ele foi aberto pela conta do
+      usuário, e logo em seguida o processo abriu conexão de rede.
+
+      Técnica MITRE ATT&CK : T1036.002 Right-to-Left Override
+      Fase da cadeia       : Furtividade
+      Confiança            : alta (95%)
+```
+
+O relatório vai para **stdout** e a diagnose de execução (tokens, trace) vai para
+**stderr**, então a saída que uma pessoa lê nunca se mistura com telemetria. O JSON
+completo, com todos os campos, continua disponível via `--out`.
+
+> As fases são traduzidas a partir das táticas da base v19.1, que tem 15 táticas.
+> Nessa versão não existe mais "Defense Evasion": ela deu lugar a "Stealth"
+> (Furtividade) e "Defense Impairment" (Degradação de defesas).
 
 ## Princípios
 

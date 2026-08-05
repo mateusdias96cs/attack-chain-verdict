@@ -21,9 +21,10 @@ import json
 import subprocess
 import sys
 import tempfile
+import textwrap
 from pathlib import Path
 
-from .agent import VerdictAgent
+from .agent import VerdictAgent, _level_for
 
 ROOT = Path(__file__).resolve().parent.parent
 RAG_DIR = ROOT / "mitre-rag"
@@ -44,24 +45,105 @@ def rag_candidates(chain_path: Path, top_k: int) -> dict:
     return json.loads(out_path.read_text(encoding="utf-8"))
 
 
+LARGURA = 78
+
+# Glossário das táticas do ATT&CK Enterprise. A tática é a FASE da cadeia de ataque;
+# o nome canônico é em inglês, então mostramos a fase em português para quem lê o
+# relatório sem conhecer o framework.
+#
+# As 15 primeiras entradas são exatamente as táticas da base v19.1 que alimenta o
+# índice (conferidas nos objetos x-mitre-tactic). Atenção: nessa versão NÃO existe
+# mais "Defense Evasion"; ela deu lugar a "Stealth" e "Defense Impairment". A entrada
+# legada continua no mapa porque um índice construído de uma versão anterior ainda
+# emite o nome antigo.
+FASES_PT = {
+    "reconnaissance": "Reconhecimento",
+    "resource development": "Preparação de recursos",
+    "initial access": "Acesso inicial",
+    "execution": "Execução",
+    "persistence": "Persistência",
+    "privilege escalation": "Escalonamento de privilégio",
+    "stealth": "Furtividade",
+    "defense impairment": "Degradação de defesas",
+    "credential access": "Acesso a credenciais",
+    "discovery": "Descoberta",
+    "lateral movement": "Movimentação lateral",
+    "collection": "Coleta",
+    "command and control": "Comando e controle",
+    "exfiltration": "Exfiltração",
+    "impact": "Impacto",
+    "defense evasion": "Evasão de defesas",  # legado (bases anteriores à v19)
+}
+
+VEREDITO_PT = {"attack": "ATAQUE", "suspicious": "SUSPEITO", "benign": "BENIGNO"}
+CONFIANCA_PT = {"high": "alta", "medium": "média", "low": "baixa", "none": "nenhuma"}
+
+
+def _fase_pt(tactics: str) -> str:
+    """Traduz a(s) tática(s) do candidato para a fase em português."""
+    if not tactics:
+        return ""
+    partes = [p.strip() for p in tactics.split(",") if p.strip()]
+    return ", ".join(FASES_PT.get(p.lower(), p) for p in partes)
+
+
+def _paragrafo(texto: str, recuo: str) -> str:
+    """Quebra prosa em linhas legíveis, preservando o recuo do bloco."""
+    return textwrap.fill(
+        " ".join((texto or "").split()),
+        width=LARGURA, initial_indent=recuo, subsequent_indent=recuo)
+
+
 def print_report(report, usage: dict) -> None:
-    print("\n" + "=" * 72)
-    print(f"VEREDITO FINAL — {report.entity}")
-    print(f"  geral: {report.overall_verdict.value}  "
-          f"(confiança {report.overall_confidence:.2f})")
-    print(f"  resumo: {report.attack_summary}")
-    print("-" * 72)
-    for i, v in enumerate(report.events):
-        tech = f"{v.attack_id} {v.technique_name}".strip() if v.attack_id != "NONE" else "— (nenhuma)"
-        print(f"[{i}] {v.event[:60]}")
-        print(f"     técnica : {tech}")
-        print(f"     conf.   : {v.confidence:.2f} ({v.confidence_level.value})")
-        print(f"     porquê  : {v.rationale}")
-    print("-" * 72)
+    """Imprime a cadeia de ataque como narrativa numerada, passo a passo.
+
+    O relatório legível vai para stdout; a diagnose (tokens) vai para stderr, para
+    que a saída que uma pessoa lê não se misture com telemetria de execução.
+    """
+    veredito = VEREDITO_PT.get(report.overall_verdict.value, report.overall_verdict.value)
+    # os limiares de confiança vivem no agente; reusar evita que renderizador e
+    # trava de coerência divirjam se um dia forem ajustados.
+    nivel_geral = CONFIANCA_PT.get(_level_for(report.overall_confidence).value, "")
+
+    print()
+    print("=" * LARGURA)
+    print(f"CADEIA DE ATAQUE: {report.entity}")
+    print(f"Classificação geral: {veredito} "
+          f"(confiança {nivel_geral}, {report.overall_confidence * 100:.0f}%)")
+    print("=" * LARGURA)
+
+    print("\nO QUE ACONTECEU\n")
+    print(_paragrafo(report.attack_summary, "  "))
+
+    total = len(report.events)
+    print(f"\nPASSO A PASSO ({total} {'passo' if total == 1 else 'passos'})")
+
+    for i, v in enumerate(report.events, start=1):
+        print()
+        # título com recuo pendente: o número ocupa coluna fixa, então o texto do
+        # título e o parágrafo abaixo dele começam ambos na coluna 6.
+        marcador = f"  {f'{i}º'.rjust(2)}  "
+        print(textwrap.fill(
+            " ".join(v.step_title.split()),
+            width=LARGURA, initial_indent=marcador, subsequent_indent="      "))
+        print(_paragrafo(v.rationale, "      "))
+        if v.attack_id != "NONE":
+            tecnica = f"{v.attack_id} {v.technique_name}".strip()
+            print(f"\n      Técnica MITRE ATT&CK : {tecnica}")
+            fase = _fase_pt(v.tactic)
+            if fase:
+                print(f"      Fase da cadeia       : {fase}")
+            print(f"      Confiança            : "
+                  f"{CONFIANCA_PT.get(v.confidence_level.value, '')} "
+                  f"({v.confidence * 100:.0f}%)")
+        else:
+            print("\n      Técnica MITRE ATT&CK : nenhuma técnica se aplica a este passo")
+
+    print("\n" + "=" * LARGURA)
     if usage:
-        print(f"tokens Gemini: {usage.get('total_tokens')} "
-              f"(in={usage.get('prompt_tokens')}, out={usage.get('output_tokens')})")
-    print("=" * 72)
+        print(f"· tokens Gemini: {usage.get('total_tokens')} "
+              f"(entrada={usage.get('prompt_tokens')}, saída={usage.get('output_tokens')})",
+              file=sys.stderr)
 
 
 def main(argv=None) -> int:

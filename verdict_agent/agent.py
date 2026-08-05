@@ -92,9 +92,13 @@ def _ground(report: ChainVerdictReport, handoff: dict, trace: list) -> ChainVerd
     # mapa index -> {ids candidatos, nome por id}
     allowed: list[dict] = []
     for ev in events:
-        ids = {c.get("attack_id") for c in (ev.get("candidates") or [])}
-        names = {c.get("attack_id"): c.get("name", "") for c in (ev.get("candidates") or [])}
-        allowed.append({"ids": ids, "names": names})
+        cands = ev.get("candidates") or []
+        ids = {c.get("attack_id") for c in cands}
+        names = {c.get("attack_id"): c.get("name", "") for c in cands}
+        # tática vem do metadado do candidato do RAG, nunca do LLM: é a fase da
+        # cadeia de ataque e não deve depender do que o modelo escreveu.
+        tactics = {c.get("attack_id"): (c.get("tactics") or "") for c in cands}
+        allowed.append({"ids": ids, "names": names, "tactics": tactics})
 
     n_in, n_out = len(events), len(report.events)
     if n_out != n_in:
@@ -103,9 +107,11 @@ def _ground(report: ChainVerdictReport, handoff: dict, trace: list) -> ChainVerd
     fixed: list[EventVerdict] = []
     for i, ev in enumerate(events):
         v = report.events[i] if i < len(report.events) else EventVerdict(
-            event=ev.get("raw", f"event {i}"), attack_id="NONE", technique_name="",
+            event=ev.get("raw", f"event {i}"),
+            step_title=f"Passo {i + 1} sem veredito do modelo",
+            attack_id="NONE", technique_name="",
             confidence=0.0, confidence_level=ConfidenceLevel.none,
-            rationale="Sem veredito retornado pelo modelo.")
+            rationale="O modelo não devolveu veredito para este passo da cadeia.")
         ids = allowed[i]["ids"]
         if v.attack_id != "NONE" and v.attack_id not in ids:
             trace.append(
@@ -118,6 +124,13 @@ def _ground(report: ChainVerdictReport, handoff: dict, trace: list) -> ChainVerd
             v.rationale = (v.rationale + " [correção: técnica fora dos candidatos do RAG]").strip()
         elif v.attack_id != "NONE" and not v.technique_name:
             v.technique_name = allowed[i]["names"].get(v.attack_id, "")
+        # tática: sempre do candidato do RAG (ou vazia quando não há técnica)
+        v.tactic = allowed[i]["tactics"].get(v.attack_id, "") if v.attack_id != "NONE" else ""
+        # título do passo: se o modelo deixou vazio, cai para a descrição do evento
+        if not (v.step_title or "").strip():
+            fallback = (ev.get("description") or ev.get("raw") or f"Passo {i + 1}").strip()
+            v.step_title = fallback[:120]
+            trace.append(f"⚠ evento {i}: step_title vazio → usando a descrição do evento.")
         # coerência confidence <-> level
         expected = _level_for(v.confidence)
         if v.attack_id == "NONE":

@@ -24,7 +24,7 @@ Agente 2  correlação temporal ................ cadeias de eventos relacionados
 Agente 3  recuperação de técnicas ATT&CK ..... candidatos por evento
       |
       v
-Agente 4  veredito final ..................... técnica + confiança + justificativa
+Agente 4  veredito final ..................... cadeia narrada passo a passo
 ```
 
 | Agente | Diretório | O que faz | Motor |
@@ -135,6 +135,29 @@ Este é o caminho principal. O comando invoca a recuperação de candidatos no a
     --top-k 4 \
     --out verdict.json
 ```
+
+A saída é a cadeia de ataque numerada, escrita para ser lida por quem não conhece o
+ATT&CK, com os dados técnicos ao lado de cada passo:
+
+```
+PASSO A PASSO (4 passos)
+
+  1º  Execução do executável malicioso mascarado cod.3aka3.scr
+      O atacante executou o arquivo malicioso cod.3aka3.scr localizado em
+      ProgramData utilizando caracteres especiais de inversão de texto para
+      ocultar sua extensão real. Após essa execução inicial, o processo passou
+      a estabelecer comunicações de rede de saída.
+
+      Técnica MITRE ATT&CK : T1036.002 Right-to-Left Override
+      Fase da cadeia       : Furtividade
+      Confiança            : alta (95%)
+
+  2º  Conexão de rede externa do arquivo cod.3aka3.scr para o IP 192.168.0.5
+      ...
+```
+
+O relatório legível vai para a saída padrão e a diagnose de execução vai para a saída
+de erro, então é possível redirecionar só o relatório. O JSON completo sai em `--out`.
 
 Se você já tem o handoff pronto (cadeia mais candidatos por evento), pule a etapa de
 recuperação:

@@ -32,19 +32,38 @@ class Verdict(str, Enum):
 
 
 class EventVerdict(BaseModel):
-    """Veredito final para UM evento da cadeia (o formato que o usuário pediu)."""
+    """Veredito final para UM passo da cadeia de ataque.
+
+    `step_title` e `rationale` são o que um leitor sem familiaridade com ATT&CK
+    consegue ler: o título nomeia a AÇÃO do atacante e o artefato envolvido, e a
+    justificativa explica o passo em prosa. Os campos técnicos (`attack_id`,
+    `confidence`) continuam ao lado, para quem quiser auditar a atribuição.
+    """
     event: str = Field(..., description="Descrição/rótulo do evento julgado.")
+    step_title: str = Field(
+        ...,
+        description=(
+            "Título do passo em português: a AÇÃO do atacante mais o artefato "
+            'concreto (arquivo, processo, IP, chave de registro). Ex.: "Execução do '
+            'arquivo mascarado cod.3aka3.scr". Sem jargão e sem T-ID.'))
     attack_id: str = Field(
         ..., description='Técnica ATT&CK atribuída (ex.: "T1036.005") ou "NONE".')
     technique_name: str = Field(
         ..., description="Nome da técnica atribuída (vazio se NONE).")
+    tactic: str = Field(
+        default="",
+        description=("Tática ATT&CK (fase da cadeia) da técnica atribuída. Preenchida "
+                     "deterministicamente a partir do candidato do RAG, não pelo LLM."))
     confidence: float = Field(
         ..., ge=0.0, le=1.0,
         description="Confiança numérica 0.0–1.0 da atribuição.")
     confidence_level: ConfidenceLevel = Field(
         ..., description="Faixa qualitativa da confiança.")
     rationale: str = Field(
-        ..., description="Justificativa curta (1 frase) em português.")
+        ...,
+        description=("Explicação do passo em português corrente, 2 a 3 frases: o que "
+                     "aconteceu, por que isso caracteriza a técnica e como se liga ao "
+                     "passo anterior ou seguinte."))
 
 
 class ChainVerdictReport(BaseModel):
@@ -57,4 +76,7 @@ class ChainVerdictReport(BaseModel):
     events: list[EventVerdict] = Field(
         default_factory=list, description="Veredito por evento, na ordem da cadeia.")
     attack_summary: str = Field(
-        ..., description="Resumo curto (1–2 frases) da narrativa de ataque em português.")
+        ...,
+        description=("Narrativa da cadeia em português corrente, 3 a 5 frases, contando "
+                     "a história do ataque do início ao fim (quem, o quê, com qual "
+                     "arquivo, para onde) sem listar T-IDs."))
