@@ -20,7 +20,7 @@ Ou seja, por evento: **(evento, técnica atribuída, nível de confiança, justi
 
 ## Princípios
 
-- **Gemini** (`gemini-2.5-flash`, `google-genai`) — único componente Gemini do
+- **Gemini** (`gemini-flash-latest`, `google-genai`) — único componente Gemini do
   pipeline (agentes 1/2 usam Groq; agente 3 é retrieval local e5).
 - **Saída estruturada Pydantic** — o `ChainVerdictReport` é o próprio `response_schema`;
   nada de parsing frágil de texto.
