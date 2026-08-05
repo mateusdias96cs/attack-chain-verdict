@@ -94,52 +94,69 @@ def _paragrafo(texto: str, recuo: str) -> str:
         width=LARGURA, initial_indent=recuo, subsequent_indent=recuo)
 
 
-def print_report(report, usage: dict) -> None:
-    """Imprime a cadeia de ataque como narrativa numerada, passo a passo.
+def render_report(report) -> str:
+    """Monta a cadeia de ataque como narrativa numerada e devolve o texto.
 
-    O relatório legível vai para stdout; a diagnose (tokens) vai para stderr, para
-    que a saída que uma pessoa lê não se misture com telemetria de execução.
+    Separado de `print_report` porque o relatório legível também é consumido fora
+    do terminal (o grafo do LangGraph expõe esse texto no estado, para que a
+    narrativa apareça no Studio em vez do JSON cru).
     """
+    linhas: list[str] = []
+
+    def escreve(texto: str = "") -> None:
+        linhas.append(texto)
+
     veredito = VEREDITO_PT.get(report.overall_verdict.value, report.overall_verdict.value)
     # os limiares de confiança vivem no agente; reusar evita que renderizador e
     # trava de coerência divirjam se um dia forem ajustados.
     nivel_geral = CONFIANCA_PT.get(_level_for(report.overall_confidence).value, "")
 
-    print()
-    print("=" * LARGURA)
-    print(f"CADEIA DE ATAQUE: {report.entity}")
-    print(f"Classificação geral: {veredito} "
-          f"(confiança {nivel_geral}, {report.overall_confidence * 100:.0f}%)")
-    print("=" * LARGURA)
+    escreve()
+    escreve("=" * LARGURA)
+    escreve(f"CADEIA DE ATAQUE: {report.entity}")
+    escreve(f"Classificação geral: {veredito} "
+            f"(confiança {nivel_geral}, {report.overall_confidence * 100:.0f}%)")
+    escreve("=" * LARGURA)
 
-    print("\nO QUE ACONTECEU\n")
-    print(_paragrafo(report.attack_summary, "  "))
+    escreve()
+    escreve("O QUE ACONTECEU")
+    escreve()
+    escreve(_paragrafo(report.attack_summary, "  "))
 
     total = len(report.events)
-    print(f"\nPASSO A PASSO ({total} {'passo' if total == 1 else 'passos'})")
+    escreve()
+    escreve(f"PASSO A PASSO ({total} {'passo' if total == 1 else 'passos'})")
 
     for i, v in enumerate(report.events, start=1):
-        print()
+        escreve()
         # título com recuo pendente: o número ocupa coluna fixa, então o texto do
         # título e o parágrafo abaixo dele começam ambos na coluna 6.
         marcador = f"  {f'{i}º'.rjust(2)}  "
-        print(textwrap.fill(
+        escreve(textwrap.fill(
             " ".join(v.step_title.split()),
             width=LARGURA, initial_indent=marcador, subsequent_indent="      "))
-        print(_paragrafo(v.rationale, "      "))
+        escreve(_paragrafo(v.rationale, "      "))
+        escreve()
         if v.attack_id != "NONE":
             tecnica = f"{v.attack_id} {v.technique_name}".strip()
-            print(f"\n      Técnica MITRE ATT&CK : {tecnica}")
+            escreve(f"      Técnica MITRE ATT&CK : {tecnica}")
             fase = _fase_pt(v.tactic)
             if fase:
-                print(f"      Fase da cadeia       : {fase}")
-            print(f"      Confiança            : "
-                  f"{CONFIANCA_PT.get(v.confidence_level.value, '')} "
-                  f"({v.confidence * 100:.0f}%)")
+                escreve(f"      Fase da cadeia       : {fase}")
+            escreve(f"      Confiança            : "
+                    f"{CONFIANCA_PT.get(v.confidence_level.value, '')} "
+                    f"({v.confidence * 100:.0f}%)")
         else:
-            print("\n      Técnica MITRE ATT&CK : nenhuma técnica se aplica a este passo")
+            escreve("      Técnica MITRE ATT&CK : nenhuma técnica se aplica a este passo")
 
-    print("\n" + "=" * LARGURA)
+    escreve()
+    escreve("=" * LARGURA)
+    return "\n".join(linhas)
+
+
+def print_report(report, usage: dict) -> None:
+    """Imprime a cadeia narrada em stdout; a diagnose de execução vai para stderr."""
+    print(render_report(report))
     if usage:
         print(f"· tokens Gemini: {usage.get('total_tokens')} "
               f"(entrada={usage.get('prompt_tokens')}, saída={usage.get('output_tokens')})",

@@ -23,7 +23,7 @@ Abra a Studio UI no navegador do Windows (o WSL2 encaminha `localhost:2024`).
 
 ## Rodar o grafo
 
-Na Studio, invoque o grafo `agentecve_pipeline`. Entrada mínima: `{}` — o nó
+Na Studio, invoque o grafo `attack_chain_verdict`. Entrada mínima: `{}` — o nó
 `agent1_silver` carrega a fixture APT29 (`verdict_agent/fixtures/apt29_chain.json`)
 quando não recebe cadeia. Para uma cadeia própria, passe `{"chain": {...}}` no formato
 do handoff-de-veredito.
@@ -39,6 +39,9 @@ do handoff-de-veredito.
   (o nó reusa `verdict_agent.cli.rag_candidates`). Ver a memória `pipeline-venv-split`.
 - **Grounding**: `agent4_verdict` só atribui técnicas que o RAG recuperou (trava no
   Agente 4).
+- **Narrativa no estado**: o Studio exibe o estado como JSON, então o nó do Agente 4
+  também grava `report_text`, a cadeia de ataque já narrada passo a passo. É esse
+  campo que se lê na interface; `verdict` continua com o objeto estruturado completo.
 - **Modo dos nós 1 e 2**: leve/demo sobre a fixture já correlacionada (representam
   parsing e correlação sem reprocessar os 1,6 GB de NDJSON). Os nós 3 e 4 executam
   os agentes reais.
@@ -46,5 +49,5 @@ do handoff-de-veredito.
 ## Arquivos
 
 - `graph.py` — `StateGraph` + os 4 nós + `graph` compilado (o que o Studio carrega).
-- `langgraph.json` — aponta `agentecve_pipeline → ./graph.py:graph`, env em `../.env`.
+- `langgraph.json` — aponta `attack_chain_verdict → ./graph.py:graph`, env em `../.env`.
 - `pyproject.toml` — torna `.` instalável (exigência do langgraph.json).

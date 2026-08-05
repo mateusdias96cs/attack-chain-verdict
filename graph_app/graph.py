@@ -44,6 +44,7 @@ class PipelineState(TypedDict, total=False):
     chain: Annotated[dict, _keep_last]                 # saída Agente 2 (linha do tempo única)
     handoff: Annotated[dict, _keep_last]               # saída Agente 3 (candidatos/evento)
     verdict: Annotated[dict, _keep_last]               # saída Agente 4 (veredito estruturado)
+    report_text: Annotated[str, _keep_last]            # a mesma saída, já narrada para leitura
     trace: Annotated[list[str], lambda old, new: (old or []) + (new or [])]
 
 
@@ -112,11 +113,15 @@ def agent3_rag(state: PipelineState) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 def agent4_verdict(state: PipelineState) -> dict[str, Any]:
     from verdict_agent.agent import VerdictAgent
+    from verdict_agent.cli import render_report
 
     handoff = state.get("handoff") or {}
     res = VerdictAgent().run(handoff)
     return {
         "verdict": res.report.model_dump(mode="json"),
+        # o Studio mostra o estado como JSON; sem este campo a cadeia narrada não
+        # apareceria legível na interface, só o objeto aninhado.
+        "report_text": render_report(res.report),
         "trace": [f"agent4_verdict: veredito {res.report.overall_verdict.value} "
                   f"p={res.report.overall_confidence:.2f} "
                   f"({res.usage.get('total_tokens', '?')} tokens Gemini)"],

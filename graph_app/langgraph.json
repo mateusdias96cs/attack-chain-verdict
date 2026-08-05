@@ -1,7 +1,7 @@
 {
   "dependencies": ["."],
   "graphs": {
-    "agentecve_pipeline": "./graph.py:graph"
+    "attack_chain_verdict": "./graph.py:graph"
   },
   "env": "../.env"
 }
