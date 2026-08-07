@@ -31,10 +31,10 @@ Agente 4  veredito final ..................... cadeia narrada passo a passo
 |---|---|---|---|
 | 1 | `silver_agent/` | Converte um log bruto em uma linha da camada Silver (cerca de 90 colunas), com normalização de PID, timestamp e hashes, e validação de qualidade | Parser determinístico por expressão regular. O modelo `llama-3.3-70b-versatile` (Groq) preenche apenas lacunas |
 | 2 | `temporal_agent/` | Materializa a camada Gold em DuckDB e monta cadeias de eventos relacionados por linha do tempo e por artefato compartilhado | Correlação determinística em SQL. O Groq apenas pontua a plausibilidade das cadeias do topo |
-| 3 | `mitre-rag/` | Recupera as técnicas ATT&CK mais próximas da descrição de cada evento | Busca vetorial local com `multilingual-e5-small` e reordenação por cross-encoder. Nenhuma chamada externa |
-| 4 | `verdict_agent/` | Decide, entre os candidatos recuperados, qual técnica se aplica a cada evento e emite o relatório final | `gemini-flash-latest` com saída estruturada validada por Pydantic |
+| 3 | `mitre-rag/` | Recupera as técnicas ATT&CK mais próximas da descrição de cada evento | Busca vetorial local com `multilingual-e5-small`, com chunking medido no tokenizer do próprio modelo. Nenhuma chamada externa |
+| 4 | `verdict_agent/` | Decide, entre os candidatos recuperados, qual técnica se aplica a cada evento e emite o relatório final | `gemini-flash-latest` com saída estruturada validada por Pydantic, apoiado por travessia de grafo no ATT&CK |
 
-Duas garantias importantes do desenho:
+Três garantias importantes do desenho:
 
 1. **Sem separação artificial por arquivo.** Os dois arquivos de origem cobrem fases
    sequenciais do mesmo ataque, com um intervalo de cerca de 4,5 horas entre elas. Toda
@@ -44,6 +44,11 @@ Duas garantias importantes do desenho:
    entre os candidatos recuperados pelo Agente 3 para aquele mesmo evento. Se o modelo
    escapar disso, o agente rebaixa a atribuição para `NONE` e registra a correção. O
    relatório final nunca cita um identificador de técnica que a busca não recuperou.
+3. **Teto de saída no Agente 4.** A geração é limitada a 8.192 tokens. Sem esse teto uma
+   geração degenerada corre até o limite do modelo, e o sintoma chega como um erro de JSON
+   inválido que não aponta a causa real. Quando a resposta bate no teto, o agente falha
+   com uma mensagem que diz exatamente isso. Uma cadeia de quatro passos consome cerca de
+   600 tokens de saída, então a folga é larga.
 
 ## Dados de entrada
 
@@ -199,7 +204,7 @@ graph_app/.venv/bin/langgraph dev --no-browser --port 2024
 ```
 
 A API sobe em `http://127.0.0.1:2024`. A primeira execução leva de um a dois minutos,
-porque o nó do Agente 3 carrega os modelos de embedding e reordenação. Detalhes em
+porque o nó do Agente 3 carrega o modelo de embedding. Detalhes em
 `graph_app/README.md`.
 
 ## Testes
@@ -208,8 +213,8 @@ porque o nó do Agente 3 carrega os modelos de embedding e reordenação. Detalh
 .venv/bin/python -m pytest tests/ -q
 ```
 
-São 33 testes e nenhum deles chama serviço externo. A execução leva cerca de dois
-minutos e meio, porque `tests/test_gold_search.py` reconstrói a camada Gold inteira em
+São 49 testes e nenhum deles chama serviço externo. A execução leva cerca de quatro
+minutos, porque `tests/test_gold_search.py` reconstrói a camada Gold inteira em
 DuckDB a partir dos 783 mil eventos reais e valida integridade referencial, unicidade de
 grão, reconciliação de contagem, a cadeia de validade SCD tipo 2 e as consultas que um
 analista realmente executa.
@@ -231,18 +236,87 @@ do MITRE ATT&CK.
 .venv/bin/python -m verdict_agent.eval_golden --out resultados.json
 ```
 
-Resultado da última medição:
+Resultado da última medição, no índice atual:
 
 | Métrica | Valor |
 |---|---|
 | Recall do Agente 3 (técnica correta entre os candidatos) | 14/15 (93%) |
-| Acurácia estrita do Agente 4 (técnica exata) | 13/15 (87%) |
-| Acurácia por família (aceita pai e subtécnica, não aceita irmãs) | 14/15 (93%) |
+| Acurácia estrita do Agente 4 (técnica exata) | 12/15 (80%) |
+| Acurácia por família (aceita pai e subtécnica, não aceita irmãs) | 13/15 (87%) |
 | Atribuições fora dos candidatos (violações de grounding) | 0/15 |
 
-Por faixa de dificuldade: fácil 5/5, média 5/5, difícil 4/5. Dos 14 casos em que a
-técnica correta foi recuperada, o Agente 4 acertou os 14. O gargalo do sistema é a
-recuperação, não a decisão final.
+Por faixa de dificuldade: fácil 5/5, média 4/5, difícil 4/5. O gargalo do sistema é a
+recuperação, não a decisão final: dos 14 casos em que a técnica correta foi recuperada,
+o Agente 4 acertou 13.
+
+Dois casos ficam de fora, e nenhum dos dois é erro de julgamento do modelo:
+
+- **C14** é o único não recuperado pelo Agente 3. É uma conexão de C2 por HTTPS cujo
+  evento traz `rundll32.exe` como imagem do processo, o que torna a descrição ambígua de
+  propósito.
+- **C09** é um empate genuíno de rotulação. O comando é `net group "Domain Admins"
+  /domain`, o gabarito diz T1087.002 e o Agente 4 respondeu T1069.002. A base ATT&CK cita
+  esse mesmo comando nas duas técnicas, e o texto do T1069.002 descreve literalmente o
+  caso ("which users belong to a particular group, such as domain administrators"). O
+  harness conta como erro porque só aceita a relação pai e subtécnica, nunca técnicas
+  distintas. O rótulo foi mantido como está: mudar gabarito depois de ver a resposta do
+  modelo estraga a medição.
+
+A contagem oscila em torno de um caso entre execuções, porque o modelo não é
+determinístico e o C09 é decidido no fio da navalha. Com 15 casos, diferenças de um caso
+não sustentam conclusão.
+
+Duas decisões de recuperação sustentam esse resultado:
+
+- **Chunking medido no tokenizer certo.** O e5 tem janela de 512 tokens e corta o
+  excedente em silêncio. O divisor de texto contava tokens pelo tokenizer padrão do
+  LlamaIndex, que não é o do e5, então 30% das descrições de técnica perdiam texto na
+  indexação, em média 146 tokens cada. Contando na moeda do próprio modelo, nada é
+  cortado.
+- **Cross-encoder desligado.** O `mmarco-mMiniLMv2` foi treinado para ranquear passagens
+  de busca web a partir de perguntas curtas, e aqui a consulta é um parágrafo
+  comportamental longo. Esse descasamento de domínio não muda o recall (14/15 com e sem
+  reordenação), mas afunda a ordem, que é o que o Agente 4 lê primeiro: o e5 puro entrega
+  MRR 0.730 e a técnica certa em primeiro lugar em 10 dos 15 casos, contra MRR 0.381 e
+  3 de 15 com o cross-encoder. A reordenação segue disponível em `use_reranker=True`,
+  para quando um reranker melhor for avaliado.
+
+## Dois mecanismos de consulta à base ATT&CK
+
+Os Agentes 3 e 4 consultam a mesma base, mas fazem perguntas de natureza diferente, e
+cada um usa o mecanismo que responde melhor à sua pergunta.
+
+- **Busca vetorial no Agente 3.** A pergunta é de um salto: com qual técnica esta
+  observação se parece? Isso é similaridade semântica entre a descrição do evento e a
+  prosa da técnica, que é exatamente o que a busca densa resolve.
+- **Travessia de grafo no Agente 4.** A pergunta é de vários saltos: esta cadeia inteira
+  é coerente com o repertório de um ator conhecido? Responder exige percorrer as relações
+  de grupo para software e de software para técnica, que não estão no texto de nenhum
+  documento indexado, então nenhuma busca densa as alcança. O módulo
+  `verdict_agent/ttp_graph.py` monta esse grafo a partir do mesmo
+  `enterprise-attack-clean.json` que alimenta o índice vetorial, sem serviço novo nem
+  cópia de dados, e injeta um bloco curto no prompt do veredito.
+
+A escolha do mecanismo é estática, tomada em tempo de projeto (`USE_TTP_GRAPH` em
+`verdict_agent/agent.py`), e não por um seletor em tempo de execução: a natureza da
+pergunta de cada agente já é conhecida, e um seletor probabilístico só acrescentaria
+latência e um modo de falha silencioso.
+
+O risco real dessa evidência é viés de confirmação, e ela tem quatro travas contra isso:
+
+1. Não amplia o conjunto de candidatos, então a trava de grounding continua valendo.
+2. Pondera a cobertura pela raridade da técnica, porque uma técnica que quase todo grupo
+   usa não discrimina nada.
+3. Normaliza pelo tamanho do repertório do grupo. Sem isso venceria sempre o maior
+   repertório da base, que é justamente o do APT29, o ator deste conjunto de dados.
+4. Suprime o bloco inteiro quando o melhor grupo não se destaca do pelotão.
+
+Medido na cadeia APT29 de quatro passos, julgando a mesma cadeia com e sem o bloco: ele
+dispara, não muda nenhuma das quatro atribuições e custa 38% a mais de prompt. Isso não
+confirma nem refuta a evidência, porque naquela cadeia não havia empate a desempatar, que
+é o cenário em que ela deveria agir. O conjunto de avaliação também não serve para
+medi-la, porque lá cada caso é julgado como cadeia de um evento só e o bloco exige
+cobertura mínima de dois eventos.
 
 ## Estrutura do projeto
 
@@ -276,3 +350,9 @@ consulta, todos corrigidos e registrados em `docs/audit/lakehouse_audit.md`.
 - O deslocamento de fuso usado como alternativa quando falta `UtcTime` foi descoberto
   neste conjunto de dados específico e precisa ser recalibrado por lote em outro
   ambiente.
+- A evidência de grafo do Agente 4 ainda não tem ganho comprovado. Ela se comporta como
+  projetado, mas medir o efeito exige cadeias longas com candidatos empatados, e o
+  conjunto de avaliação atual não tem esse tipo de caso.
+- A avaliação usa 15 casos, o que é pouco para separar variação real de ruído. Diferenças
+  de um caso entre execuções não sustentam conclusão, ainda mais porque o modelo do
+  Agente 4 não é determinístico.

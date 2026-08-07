@@ -27,11 +27,15 @@ enterprise-attack-stix/
 
 # ── Índice vetorial ChromaDB (binário grande; regenerável via mitre-rag/ingest.py) ──
 chroma_db/
-chroma_db.bak_techonly/
+chroma_db.bak_*/
 
 # ── Saídas/artefatos temporários ──
 *.tmp
 *.handoff.json
+
+# ── Resultados de avaliação (regeneráveis via verdict_agent/eval_golden.py) ──
+resultados.json
+res.json
 
 # LangGraph dev runtime (não versionar)
 graph_app/.langgraph_api/
