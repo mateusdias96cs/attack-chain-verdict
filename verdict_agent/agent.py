@@ -24,8 +24,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from . import ttp_graph
 from .gemini_client import GeminiVerdict
 from .schema import ChainVerdictReport, ConfidenceLevel, EventVerdict
+
+# Roteamento ESTÁTICO de mecanismo de retrieval: vetorial no Agente 3 (pergunta de 1
+# salto, "com que técnica isso se parece"), grafo AQUI no Agente 4 (pergunta multi-hop,
+# "esta cadeia é coerente com o repertório de um ator"). Ver verdict_agent/ttp_graph.py.
+USE_TTP_GRAPH = True
 
 # Teto de candidatos por evento. Precisa acomodar TODO o union (rerank top_k ∪ e5_extra),
 # senão trunca os candidatos recuperados pelo e5 no fim da lista — foi o que escondia
@@ -41,7 +47,7 @@ class VerdictResult:
     trace: list = field(default_factory=list)
 
 
-def build_prompt(handoff: dict) -> str:
+def build_prompt(handoff: dict, use_ttp_graph: bool = USE_TTP_GRAPH) -> str:
     """Renderiza a cadeia + candidatos num texto compacto para o Gemini."""
     entity = handoff.get("entity", "?")
     prior = handoff.get("prior_chain_verdict") or {}
@@ -70,6 +76,17 @@ def build_prompt(handoff: dict) -> str:
             lines.append(
                 f"    - {c.get('attack_id')} {c.get('name')}{sub}"
                 f" | tactics: {c.get('tactics', '')}{score_str}")
+    # Evidência de grafo: entra DEPOIS dos candidatos e antes da instrução final, para
+    # ser lida como anotação sobre a cadeia já descrita, não como parte da observação.
+    # Não amplia o conjunto de candidatos — a trava de _ground() segue valendo.
+    if use_ttp_graph:
+        try:
+            block = ttp_graph.render(ttp_graph.analyze(handoff))
+        except Exception:      # ausência do STIX não pode derrubar o veredito
+            block = ""
+        if block:
+            lines.append(block)
+
     lines.append(
         "\nReturn one EventVerdict per event above, in the same order, choosing the "
         "assigned technique ONLY from that event's candidate ids (or NONE).")

@@ -145,6 +145,38 @@ def test_empty_step_title_falls_back_to_event_description():
     assert any("step_title vazio" in t for t in trace)
 
 
+def test_truncated_response_fails_with_actionable_message():
+    """Resposta cortada no teto de saída tem de dizer a causa, não 'JSON inválido'.
+
+    Regressão observada em execução real: sem teto de tokens o modelo degenerou,
+    gerou ~333 mil caracteres e a resposta truncada quebrou a validação do schema
+    com 'Invalid JSON: EOF while parsing a string', que não aponta a causa.
+    """
+    import pytest
+
+    from verdict_agent.gemini_client import MAX_OUTPUT_TOKENS, _raise_if_truncated
+
+    class _Resp:
+        def __init__(self, motivo):
+            self.candidates = [type("C", (), {
+                "finish_reason": type("F", (), {"name": motivo})()})()]
+
+    with pytest.raises(RuntimeError, match="truncada"):
+        _raise_if_truncated(_Resp("MAX_TOKENS"), MAX_OUTPUT_TOKENS)
+
+    # parada normal e resposta sem candidatos não podem virar falso positivo
+    _raise_if_truncated(_Resp("STOP"), MAX_OUTPUT_TOKENS)
+    _raise_if_truncated(type("R", (), {"candidates": []})(), MAX_OUTPUT_TOKENS)
+
+
+def test_gemini_config_caps_output_tokens():
+    """O teto de saída precisa chegar na configuração da chamada, como nos agentes 1 e 2."""
+    from verdict_agent.gemini_client import MAX_OUTPUT_TOKENS, GeminiVerdict
+
+    assert GeminiVerdict(api_key="x").max_output_tokens == MAX_OUTPUT_TOKENS
+    assert GeminiVerdict(api_key="x", max_output_tokens=512).max_output_tokens == 512
+
+
 def test_all_tactics_of_the_indexed_base_have_a_portuguese_phase():
     """Toda tática da base v19.1 precisa de tradução, senão a fase sai em inglês.
 

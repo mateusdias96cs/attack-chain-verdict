@@ -28,6 +28,13 @@ _TRANSIENT_STATUS = {429, 500, 503}
 _MAX_TRIES = 6
 _BASE_BACKOFF = 4.0  # s; cresce exponencialmente (4, 8, 16, 32, 64)
 
+# Teto de saída, como nos agentes 1 e 2. Sem ele uma geração degenerada corre até o
+# limite do modelo: já foi observada uma resposta de ~333 mil caracteres que voltou
+# truncada e quebrou a validação do schema, depois de minutos gerando e queimando
+# tokens. Uma cadeia de 4 passos consome ~600 tokens de saída, então este teto dá
+# folga larga para cadeias longas e ainda assim corta o descontrole.
+MAX_OUTPUT_TOKENS = 8192
+
 DEFAULT_MODEL = "gemini-flash-latest"
 
 SYSTEM_PROMPT = (
@@ -82,11 +89,40 @@ def load_env_file(start: Path | None = None) -> None:
             return
 
 
+def _finish_reason(resp) -> str:
+    """Motivo de parada da geração, como string, tolerante ao formato do SDK."""
+    cands = getattr(resp, "candidates", None) or []
+    if not cands:
+        return ""
+    fr = getattr(cands[0], "finish_reason", None)
+    if fr is None:
+        return ""
+    return str(getattr(fr, "name", fr))
+
+
+def _raise_if_truncated(resp, teto: int) -> None:
+    """Falha com mensagem acionável quando a resposta bateu no teto de saída.
+
+    Sem isso o sintoma chega como 'Invalid JSON: EOF while parsing a string', que
+    não diz nada sobre a causa real: o JSON está incompleto porque a geração foi
+    cortada no meio, não porque o modelo escreveu JSON inválido.
+    """
+    if "MAX_TOKENS" not in _finish_reason(resp).upper():
+        return
+    raise RuntimeError(
+        f"O Gemini atingiu o teto de {teto} tokens de saída e a resposta veio "
+        f"truncada, então o JSON do veredito está incompleto. Isso costuma indicar "
+        f"geração degenerada (repetição) ou uma cadeia longa demais para o teto. "
+        f"Aumente max_output_tokens ou reduza o número de eventos da cadeia.")
+
+
 class GeminiVerdict:
     """Carrega o cliente Gemini uma vez; reusa em cada judge()."""
 
-    def __init__(self, model: str = DEFAULT_MODEL, api_key: str | None = None):
+    def __init__(self, model: str = DEFAULT_MODEL, api_key: str | None = None,
+                 max_output_tokens: int = MAX_OUTPUT_TOKENS):
         self.model = model
+        self.max_output_tokens = max_output_tokens
         load_env_file()
         # GEMINI_API_KEY é a chave documentada no .env.example deste projeto.
         self._api_key = (api_key or os.environ.get("GEMINI_API_KEY")
@@ -119,6 +155,7 @@ class GeminiVerdict:
             temperature=0.0,
             response_mime_type="application/json",
             response_schema=ChainVerdictReport,
+            max_output_tokens=self.max_output_tokens,
         )
         resp = None
         for attempt in range(1, _MAX_TRIES + 1):
@@ -149,6 +186,8 @@ class GeminiVerdict:
                 "output_tokens": getattr(u, "candidates_token_count", 0) or 0,
                 "total_tokens": getattr(u, "total_token_count", 0) or 0,
             }
+        _raise_if_truncated(resp, self.max_output_tokens)
+
         report = resp.parsed
         if not isinstance(report, ChainVerdictReport):
             # fallback: valida o JSON cru se o SDK não devolveu o objeto tipado
