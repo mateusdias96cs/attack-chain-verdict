@@ -25,10 +25,10 @@ import re
 
 import chromadb
 from llama_index.core import Document, Settings, StorageContext, VectorStoreIndex
-from llama_index.core.node_parser import SentenceSplitter
 from llama_index.vector_stores.chroma import ChromaVectorStore
 
-from config import CHROMA_DIR, COLLECTION, EMBED_MODEL, SRC, get_embed_model
+from config import (CHROMA_DIR, COLLECTION, EMBED_MODEL, SRC, get_embed_model,
+                    get_node_parser)
 
 _LINK = re.compile(r"\[([^\]]+)\]\([^)]+\)")   # [anchor](url) -> anchor
 _CITE = re.compile(r"\(Citation:[^)]*\)")       # (Citation: ...) -> ''
@@ -126,7 +126,10 @@ def main() -> None:
 
     print(f"[2/4] Carregando modelo de embedding local: {EMBED_MODEL}")
     Settings.embed_model = get_embed_model()
-    Settings.node_parser = SentenceSplitter(chunk_size=1024, chunk_overlap=100)
+    # O parser vai EXPLÍCITO em from_documents(transformations=...): Settings.transformations
+    # é resolvido na primeira leitura e fica em cache, então mexer em Settings.node_parser
+    # depois disso pode não propagar. Passar direto elimina a ambiguidade.
+    node_parser = get_node_parser()
 
     print(f"[3/4] Abrindo ChromaDB persistente em {CHROMA_DIR}/")
     client = chromadb.PersistentClient(path=str(CHROMA_DIR))
@@ -140,11 +143,13 @@ def main() -> None:
     storage = StorageContext.from_defaults(vector_store=vector_store)
 
     print(f"[4/4] Gerando embeddings de {len(docs)} docs e gravando (CPU, pode levar alguns min)...")
-    VectorStoreIndex.from_documents(docs, storage_context=storage, show_progress=True)
+    VectorStoreIndex.from_documents(docs, storage_context=storage,
+                                    transformations=[node_parser], show_progress=True)
 
     total = client.get_collection(COLLECTION).count()
     print(f"\n✅ Concluído. {total} vetores na coleção '{COLLECTION}' "
-          f"({n_tech} técnicas + {n_proc} procedures).")
+          f"({n_tech} técnicas + {n_proc} procedures, {total - len(docs)} chunks extras "
+          f"de documentos longos).")
 
 
 if __name__ == "__main__":

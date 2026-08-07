@@ -13,9 +13,10 @@ inferência de linguagem, mas NÃO produz embeddings; aqui ele seria opcional s�
 uma explicação/síntese em cima do resultado do retrieval (não implementado neste
 agente, que é retrieval puro e determinístico).
 
-Pipeline de 2 estágios (igual ao query.py, encapsulado como agente reutilizável):
-  1) busca vetorial e5 → POOL de candidatos
-  2) cross-encoder reordena → top-k
+Pipeline (encapsulado como agente reutilizável):
+  1) busca vetorial e5 → POOL de candidatos, dedup por attack_id
+  2) rerank por cross-encoder: OPCIONAL e desligado por padrão (ver DEFAULT_USE_RERANKER,
+     que documenta a medição no golden set)
 """
 from __future__ import annotations
 
@@ -29,6 +30,22 @@ from config import CHROMA_DIR, COLLECTION, get_embed_model, get_reranker
 
 DEFAULT_POOL = 20      # candidatos do 1º estágio antes do rerank
 DEFAULT_TOP_K = 3      # "as duas, três técnicas mais prováveis"
+
+# Cross-encoder DESLIGADO por padrão. Medido no golden set (15 casos), via candidates(),
+# no índice completo de 18.072 vetores:
+#
+#                        recall    MRR      top-1
+#   e5 puro              14/15     0.730    10/15
+#   e5 + cross-encoder   14/15     0.381     3/15
+#
+# O rerank NÃO muda o recall (o mesmo caso falha nos dois); ele destrói a ORDEM, que é o
+# que o Agente 4 lê primeiro. O mmarco-mMiniLMv2 foi treinado para ranquear passagem de
+# busca web a partir de query curta em forma de pergunta; aqui a query é um parágrafo
+# comportamental longo vindo dos adaptadores, sobre prosa do ATT&CK. O descasamento de
+# domínio faz ele ENTERRAR o gabarito: 7 casos que eram #1 no e5 caíram para #3 ou pior.
+# Ligue de volta (use_reranker=True) apenas com um reranker que supere o e5 puro no
+# eval_recall.py, p.ex. avaliar BAAI/bge-reranker-v2-m3 antes de adotar.
+DEFAULT_USE_RERANKER = False
 
 
 @dataclass
@@ -47,9 +64,11 @@ class TechniqueMatch:
 
 
 class TechniqueClassifier:
-    """Carrega e5 + reranker + índice UMA vez; reusa em cada classify()."""
+    """Carrega e5 + índice UMA vez; reusa em cada classify(). O reranker só é
+    instanciado se use_reranker=True (desligado por padrão)."""
 
-    def __init__(self, pool: int = DEFAULT_POOL, use_reranker: bool = True):
+    def __init__(self, pool: int = DEFAULT_POOL,
+                 use_reranker: bool = DEFAULT_USE_RERANKER):
         self.pool = pool
         self.use_reranker = use_reranker
         Settings.embed_model = get_embed_model()
@@ -80,7 +99,10 @@ class TechniqueClassifier:
         # classify() é o retrieval "puro" (query.py/ask.py/testes): filtra para docs de
         # TÉCNICA (nome+descrição) → comportamento estável, idêntico ao índice antigo.
         # Os procedure examples enriquecem só o candidates() (caminho do pipeline).
-        k = self.pool if self.use_reranker else max(top_k, 1)
+        # Sempre recupera o POOL, mesmo sem reranker: uma técnica longa vira vários
+        # chunks e a dedup por attack_id logo abaixo colapsa todos em 1 candidato.
+        # Pedir só top_k nós devolveria MENOS de top_k técnicas distintas.
+        k = max(self.pool, top_k)
         nodes = self._retrieve(description, k, doc_type="technique")
         if not nodes:                                    # índice sem doc_type → fallback
             nodes = self._retrieve(description, k)

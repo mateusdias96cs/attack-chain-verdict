@@ -2,7 +2,8 @@
 Ponte Agente 2/3 → Agente 4 (roda no venv do mitre-rag, que tem torch/e5).
 
 Lê uma CADEIA (saída do agente de correlação temporal) e, para CADA evento, usa o
-classificador RAG (e5 + cross-encoder) para recuperar os top-k candidatos ATT&CK.
+classificador RAG (e5; cross-encoder desligado, ver DEFAULT_USE_RERANKER em agent.py)
+para recuperar os top-k candidatos ATT&CK.
 Emite o HANDOFF-DE-VEREDITO que o Agente 4 (Gemini) consome para decidir, por evento,
 qual técnica realmente se aplica.
 
@@ -58,8 +59,7 @@ def main() -> int:
         desc = _describe(ev)
         if not desc or len(desc) < 10:
             raise ValueError(f"descrição vazia/curta no evento {i}: {desc!r}")
-        # UNION rerank ∪ e5-pool: dá ao Agente 4 candidatos precisos (rerank) SEM perder
-        # a técnica canônica que o cross-encoder às vezes enterra (recall do e5).
+        # UNION técnica ∪ procedure: cobertura abstrata + concreta, dedup por attack_id.
         matches = clf.candidates(desc, top_k=top_k, e5_extra=6)
         if not matches:
             raise ValueError(f"retrieval VAZIO no evento {i} — quebra silenciosa")

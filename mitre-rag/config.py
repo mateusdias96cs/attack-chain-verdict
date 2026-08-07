@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.postprocessor import SentenceTransformerRerank
 
 # --- Caminhos e coleção ---------------------------------------------------
@@ -36,6 +37,34 @@ def get_embed_model() -> HuggingFaceEmbedding:
         model_name=EMBED_MODEL,
         text_instruction=E5_PASSAGE_PREFIX,
         query_instruction=E5_QUERY_PREFIX,
+    )
+
+
+# --- Chunking consciente do tokenizer -------------------------------------
+# O e5 tem janela de 512 tokens e corta o excedente em SILÊNCIO. O SentenceSplitter
+# conta tokens com o tokenizer padrão do LlamaIndex (cl100k), que NÃO é o do e5
+# (XLM-R/SentencePiece): um chunk "seguro" numa contagem estoura na outra. Medido no
+# corpus: 30% das descrições de técnica passavam de 512 tokens e perdiam em média 146
+# (pior caso 802), e o splitter só dividia 2 documentos em 697 porque o chunk_size de
+# 1024 quase nunca disparava. Contar com o tokenizer CERTO elimina o corte.
+EMBED_MAX_TOKENS = 512
+CHUNK_SIZE = 400        # 400 + cabeçalho de metadados (~73) ainda cabe nos 512
+CHUNK_OVERLAP = 50
+
+
+def get_tokenizer():
+    """Tokenizer do MESMO modelo de embedding, para o splitter contar certo."""
+    from transformers import AutoTokenizer  # import tardio (pesado)
+
+    return AutoTokenizer.from_pretrained(EMBED_MODEL)
+
+
+def get_node_parser() -> SentenceSplitter:
+    """Splitter que mede o chunk na moeda do e5, não na do tokenizer padrão."""
+    return SentenceSplitter(
+        chunk_size=CHUNK_SIZE,
+        chunk_overlap=CHUNK_OVERLAP,
+        tokenizer=get_tokenizer().encode,
     )
 
 
