@@ -100,6 +100,33 @@ uma conexão a porta atípica logo após a criação de um processo conta. Medid
 escala, o tráfego legítimo é declarado legítimo com prova, e o portão não faz nenhuma
 chamada de modelo.
 
+### Assinatura digital e caminho do binário
+
+O portão também olha duas pistas fortes que separam o binário bom do ruim, e usa as duas
+para dar contexto ao humano que audita, não para decidir sozinho no lugar dele. A primeira
+é o **caminho** de onde o executável roda. Binário de sistema mora em lugar previsível,
+como `C:\Windows` e `C:\Program Files`, enquanto malware costuma rodar de pasta gravável
+pelo usuário, como `Temp`, `AppData`, `ProgramData` e `Downloads`. A segunda é a
+**assinatura digital**, o carimbo de autenticidade que o Windows registra no próprio
+evento quando a verificação está ligada.
+
+Isso resolve a ambiguidade dos sinais fracos de persistência. Uma tarefa agendada ou uma
+chave de Registro apontando para um binário em `Program Files` é quase sempre um
+atualizador legítimo, enquanto a mesma coisa apontando para `Temp` ou `AppData` é o padrão
+clássico de persistência maliciosa. O portão trata o segundo caso como sinal forte e libera
+o primeiro. Do lado do legítimo, a prova auditável passa a incluir afirmações positivas,
+como todos os executáveis terem rodado de diretórios de sistema e terem assinatura válida
+de emissor confiável, que é uma evidência bem mais útil para o analista do que apenas a
+ausência de padrões ruins.
+
+Duas honestidades importam aqui. A assinatura só entra na conta quando o log a traz: se a
+configuração do coletor não verifica assinatura, o campo vem vazio, e o portão não conclui
+"não assinado" por ausência, apenas deixa de usar esse sinal. E nenhuma das duas pistas é
+prova absoluta, porque existe malware com certificado roubado e existe ataque que injeta
+código dentro de um processo assinado que roda do caminho certo. Por isso o caminho e a
+assinatura afiam a decisão, mas não substituem as regras de comportamento nem o julgamento
+do humano, que continua sendo quem conhece o contexto da empresa e do ambiente.
+
 ## Dados de entrada
 
 O pipeline foi construído sobre o conjunto de avaliação APT29 do MITRE (dmevals), em
@@ -269,7 +296,7 @@ porque o nó do Agente 3 carrega o modelo de embedding. Detalhes em
 .venv/bin/python -m pytest tests/ -q
 ```
 
-São 62 testes e nenhum deles chama serviço externo. A execução leva cerca de quatro
+São 69 testes e nenhum deles chama serviço externo. A execução leva cerca de quatro
 minutos, porque `tests/test_gold_search.py` reconstrói a camada Gold inteira em
 DuckDB a partir dos 783 mil eventos reais e valida integridade referencial, unicidade de
 grão, reconciliação de contagem, a cadeia de validade SCD tipo 2 e as consultas que um
@@ -418,8 +445,9 @@ consulta, todos corrigidos e registrados em `docs/audit/lakehouse_audit.md`.
   reduz esse risco, mas é amostra, não cobertura total. A prova de legitimidade atesta que
   os padrões de ataque conhecidos não apareceram, não que a atividade seja segura em
   termos absolutos.
-- A prova de legitimidade se apoia no que o evento carrega e na ausência de padrões
-  conhecidos, não na verificação de assinatura digital nem na conferência do caminho de
-  instalação do binário. Persistência apontando para um binário assinado no caminho
-  esperado e persistência apontando para um binário em pasta gravável pelo usuário ainda
-  são tratadas pelo mesmo sinal fraco.
+- A leitura de assinatura digital depende de o coletor ter ligado a verificação, o que
+  nem sempre acontece. No conjunto de avaliação atual esses campos vêm vazios, então quem
+  faz a separação na prática é o caminho do binário, e a parte de assinatura só entra em
+  ambientes cujo Sysmon está configurado para verificar. Nem assinatura nem caminho são
+  prova absoluta, pela possibilidade de certificado roubado e de injeção em processo
+  assinado.

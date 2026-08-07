@@ -97,6 +97,7 @@ def build_gold(con: duckdb.DuckDBPyConnection, sample: int | None = None) -> Non
         "$.SourcePort", "$.DestinationPort", "$.DestPort", "$.Protocol",      # 31-34
         "$.TargetFilename", "$.TargetObject", "$.Details",                    # 35-37
         "$.QueryName", "$.EventType",                                         # 38-39
+        "$.Signed", "$.SignatureStatus",                                      # 40-41
     ]
     path_list = "[" + ",".join(f"'{p}'" for p in paths) + "]"
 
@@ -144,7 +145,10 @@ def build_gold(con: duckdb.DuckDBPyConnection, sample: int | None = None) -> Non
             v[36]                                                  AS registry_target_object,
             v[37]                                                  AS registry_details,
             v[38]                                                  AS dns_query_name,
-            v[39]                                                  AS event_result
+            v[39]                                                  AS event_result,
+            CASE WHEN lower(v[40]) = 'true' THEN true
+                 WHEN lower(v[40]) = 'false' THEN false ELSE NULL END AS signed,
+            v[41]                                                  AS signature_status
         FROM raw
     """)
 

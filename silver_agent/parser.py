@@ -198,7 +198,7 @@ _CONSUMED = set().union(*schema.COALESCE_MAP.values()) | {
     "SourcePort", "DestinationPort", "DestPort", "IpPort", "IpAddress",
     "Protocol", "Initiated",
     "Direction", "SourceIsIpv6", "DestinationIsIpv6", "IsExecutable",
-    "Archived", "LogonType", "SourceThreadId", "TargetThreadId", "NewThreadId",
+    "Archived", "Signed", "LogonType", "SourceThreadId", "TargetThreadId", "NewThreadId",
     "EventType", "MessageNumber", "MessageTotal", "ParentProcessName",
     # ruído de envelope Logstash/NXLog irrelevante p/ Silver
     "@version", "tags", "SourceModuleName", "SourceModuleType", "SourceName",
@@ -267,6 +267,9 @@ def deterministic_parse(raw: str, source_file: str | None = None) -> tuple[dict,
     # arquivo
     silver["file_is_executable"] = _to_bool(rec.get("IsExecutable"))
     silver["file_archived"] = _to_bool(rec.get("Archived"))
+
+    # assinatura digital (só presente se a verificação do Sysmon estiver ligada)
+    silver["signed"] = _to_bool(rec.get("Signed"))
 
     # registro: sub-tipo (12=Create/Delete, 13=SetValue)
     if event_id in (12, 13):

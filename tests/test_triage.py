@@ -174,6 +174,80 @@ def test_chain_masquerade_mais_c2_escala():
     assert "T1036" in d.attack_ids
 
 
+# ---------------------------------------------------------------------------
+# Assinatura digital + caminho do binário
+# ---------------------------------------------------------------------------
+def test_schtask_userpath_escala_high():
+    """Tarefa agendada apontando p/ pasta gravável pelo usuário é sinal forte."""
+    d = _decide_one({"EventID": 1, "Channel": "Microsoft-Windows-Sysmon/Operational",
+                     "Hostname": "H", "RecordNumber": 20, "UtcTime": "2026-01-01 10:00:00.000",
+                     "Image": "C:\\Windows\\System32\\schtasks.exe",
+                     "CommandLine": "schtasks /create /tn U /tr C:\\ProgramData\\a.exe"})
+    assert d.decision == "escalate"
+    assert any(h.rule_id == "PERSIST_SCHTASK_USERPATH" for h in d.fired)
+
+
+def test_schtask_systempath_nao_e_high():
+    """Mesma tarefa apontando p/ Program Files fica em sinal fraco (não escala sozinha)."""
+    d = _decide_one({"EventID": 1, "Channel": "Microsoft-Windows-Sysmon/Operational",
+                     "Hostname": "H", "RecordNumber": 21, "UtcTime": "2026-01-01 10:00:00.000",
+                     "Image": "C:\\Windows\\System32\\schtasks.exe",
+                     "CommandLine": "schtasks /create /tn U /tr \"C:\\Program Files\\App\\upd.exe\""})
+    assert not any(h.rule_id == "PERSIST_SCHTASK_USERPATH" for h in d.fired)
+    assert d.decision == "clear"
+
+
+def test_exec_nao_assinado_userpath_escala():
+    """Binário não assinado rodando de pasta do usuário (produção com assinatura no log)."""
+    d = _decide_one({"EventID": 1, "Channel": "Microsoft-Windows-Sysmon/Operational",
+                     "Hostname": "H", "RecordNumber": 22, "UtcTime": "2026-01-01 10:00:00.000",
+                     "Image": "C:\\Users\\j\\AppData\\Local\\Temp\\a.exe",
+                     "CommandLine": "a.exe", "Signed": "false", "SignatureStatus": "Unavailable"})
+    assert d.decision == "escalate"
+    assert any(h.rule_id == "EXEC_UNSIGNED_USERPATH" for h in d.fired)
+
+
+def test_exec_assinado_sistema_fica_clear_com_prova():
+    """Binário assinado pela Microsoft em caminho de sistema: prova positiva de legítimo."""
+    d = _decide_one({"EventID": 1, "Channel": "Microsoft-Windows-Sysmon/Operational",
+                     "Hostname": "H", "RecordNumber": 23, "UtcTime": "2026-01-01 10:00:00.000",
+                     "Image": "C:\\Windows\\System32\\svchost.exe", "CommandLine": "svchost.exe -k netsvcs",
+                     "Signed": "true", "Signature": "Microsoft Windows", "SignatureStatus": "Valid"})
+    assert d.decision == "clear"
+    provas = " ".join(d.benign_evidence["positive_signals"])
+    assert "diretórios de sistema" in provas
+    assert "assinatura digital válida" in provas
+
+
+def test_exec_userpath_sem_assinatura_fica_clear_medium():
+    """Sem assinatura no log (como neste dataset), execução de pasta de usuário é só
+    sinal fraco: NÃO escala sozinha e signed:false não casa (estado 'desconhecido')."""
+    d = _decide_one({"EventID": 1, "Channel": "Microsoft-Windows-Sysmon/Operational",
+                     "Hostname": "H", "RecordNumber": 24, "UtcTime": "2026-01-01 10:00:00.000",
+                     "Image": "C:\\Users\\j\\AppData\\Local\\Programs\\app\\app.exe",
+                     "CommandLine": "app.exe"})
+    assert d.decision == "clear"
+    assert any(h.rule_id == "EXEC_FROM_USERPATH" for h in d.fired)
+    assert not any(h.rule_id == "EXEC_UNSIGNED_USERPATH" for h in d.fired)
+
+
+def test_signature_state_helper():
+    assert T._signature_state({"signed": True, "signature": "Microsoft Corporation",
+                               "signature_status": "Valid"}) == "trusted"
+    assert T._signature_state({"signed": False, "signature_status": "Unavailable"}) == "untrusted"
+    assert T._signature_state({"signed": True, "signature": "Contoso LLC",
+                               "signature_status": "Valid"}) == "untrusted"   # emissor não confiável
+    assert T._signature_state({"signed": None, "signature": None,
+                               "signature_status": None}) == "unknown"        # log sem assinatura
+
+
+def test_path_helpers():
+    assert T._is_system_path("C:\\Windows\\System32\\svchost.exe")
+    assert not T._is_system_path("C:\\Users\\j\\AppData\\Local\\Temp\\a.exe")
+    assert T._is_userwritable_path("C:\\ProgramData\\victim\\x.scr")
+    assert not T._is_userwritable_path("C:\\Windows\\System32\\cmd.exe")
+
+
 def test_external_ip_helper():
     assert T.is_external_ip("8.8.8.8")
     assert not T.is_external_ip("10.0.0.5")

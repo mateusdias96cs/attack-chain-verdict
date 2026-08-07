@@ -40,6 +40,9 @@ class Step:
     image_name: str | None
     artifact: str | None       # o artefato mais informativo do evento
     record_number: int
+    image_path: str | None = None          # caminho completo (regras de caminho/assinatura)
+    signed: bool | None = None
+    signature_status: str | None = None
 
     def line(self) -> str:
         """Uma linha compacta para o LLM (economia de token)."""
@@ -109,6 +112,8 @@ def _row_to_step(r: dict) -> Step:
         event_id=r["event_id"], category=r["event_category"],
         image_name=r["image_name"], artifact=(r["artifact"] or None),
         record_number=r["record_number"],
+        image_path=r.get("image_path"), signed=r.get("signed"),
+        signature_status=r.get("signature_status"),
     )
 
 
@@ -121,7 +126,8 @@ def entity_timelines(con: duckdb.DuckDBPyConnection,
                   "(" + ",".join(f"'{c}'" for c in NOTABLE_CATEGORIES) + ")") if notable_only else ""
     rows = _rows(con, f"""
         SELECT hostname_nk, subject_account, source_file, event_utc_time, event_id,
-               event_category, image_name, record_number,
+               event_category, image_name, image_path, signed, signature_status,
+               record_number,
                {_ARTIFACT_EXPR} AS artifact
         FROM fact_security_event
         WHERE is_actor {cat_filter}

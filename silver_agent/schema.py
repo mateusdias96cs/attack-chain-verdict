@@ -30,6 +30,8 @@ SILVER_COLUMNS: list[str] = [
     # processo (ator)
     "process_guid", "process_id", "image_path", "image_name", "company", "product",
     "description", "original_file_name", "file_version", "command_line",
+    # assinatura digital do executável (Sysmon, só quando a verificação está ligada)
+    "signed", "signature", "signature_status",
     "current_directory", "integrity_level", "hash_sha1", "hash_md5", "hash_sha256",
     "hash_imphash", "parent_process_guid", "parent_process_id", "parent_image",
     "parent_command_line", "logon_guid", "terminal_session_id",
@@ -101,6 +103,8 @@ COALESCE_MAP: dict[str, list[str]] = {
     "description": ["Description"],
     "original_file_name": ["OriginalFileName"],
     "file_version": ["FileVersion"],
+    "signature": ["Signature"],
+    "signature_status": ["SignatureStatus"],
     "command_line": ["CommandLine"],
     "current_directory": ["CurrentDirectory"],
     "integrity_level": ["IntegrityLevel"],

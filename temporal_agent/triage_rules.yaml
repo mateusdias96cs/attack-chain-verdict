@@ -58,6 +58,21 @@
     image_name: [schtasks.exe]
     command_line_contains: ["/create", " -create"]
 
+# Persistência apontando para binário em pasta gravável pelo usuário: o alvo do /tr fica
+# na linha de comando. Isto separa o atualizador legítimo (aponta p/ Program Files) do
+# tel de persistência maliciosa (aponta p/ Temp/AppData/ProgramData). Por isso é FORTE.
+- id: PERSIST_SCHTASK_USERPATH
+  title: Tarefa agendada apontando para binário em pasta gravável pelo usuário
+  attack_id: T1053.005
+  tactic: Persistence
+  level: high
+  scope: event
+  match:
+    image_name: [schtasks.exe]
+    command_line_contains: ["/create", " -create"]
+    command_line_regex: ["\\\\appdata\\\\", "\\\\temp\\\\", "\\\\programdata\\\\",
+                         "\\\\users\\\\public\\\\", "\\\\downloads\\\\"]
+
 - id: PERSIST_RUN_KEY
   title: Persistência via chave Run do Registro
   attack_id: T1547.001
@@ -66,6 +81,45 @@
   scope: event
   match:
     registry_target_object_regex: ["\\\\CurrentVersion\\\\Run"]
+
+# Run key cujo VALOR (registry_details) aponta para pasta gravável pelo usuário: mesma
+# lógica da tarefa agendada, sinal FORTE.
+- id: PERSIST_RUN_KEY_USERPATH
+  title: Chave Run apontando para binário em pasta gravável pelo usuário
+  attack_id: T1547.001
+  tactic: Persistence
+  level: high
+  scope: event
+  match:
+    registry_target_object_regex: ["\\\\CurrentVersion\\\\Run"]
+    registry_details_regex: ["\\\\appdata\\\\", "\\\\temp\\\\", "\\\\programdata\\\\",
+                            "\\\\users\\\\public\\\\", "\\\\downloads\\\\"]
+
+# Execução de binário NÃO ASSINADO a partir de pasta gravável pelo usuário. Depende de o
+# log trazer a assinatura (verificação do Sysmon ligada); onde não traz, não dispara.
+- id: EXEC_UNSIGNED_USERPATH
+  title: Executável não assinado rodando de pasta gravável pelo usuário
+  attack_id: T1204.002
+  tactic: Execution
+  level: high
+  scope: event
+  match:
+    category: process_create
+    image_userwritable: true
+    signed: false
+
+# Execução a partir de pasta gravável pelo usuário (sem olhar assinatura): sinal FRACO,
+# comum tanto em malware quanto em instaladores/apps portáteis legítimos. Precisa
+# corroboração, mas entra como evidência auditável.
+- id: EXEC_FROM_USERPATH
+  title: Processo executado de pasta gravável pelo usuário
+  attack_id: T1204.002
+  tactic: Execution
+  level: medium
+  scope: event
+  match:
+    category: process_create
+    image_userwritable: true
 
 - id: PERSIST_SERVICE_INSTALL
   title: Instalação de novo serviço do Windows

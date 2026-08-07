@@ -42,6 +42,51 @@ _EVENT_ID_CATEGORY = {
 
 _MATCH_OPS = ("_contains", "_regex", "_mask")
 
+# Diretórios de sistema onde binário legítimo mora (prefixo, case-insensitive).
+_SYSTEM_PATH_PREFIXES = (
+    "c:\\windows\\", "c:\\program files\\", "c:\\program files (x86)\\",
+    "\\systemroot\\", "\\??\\c:\\windows\\", "%systemroot%",
+)
+# Marcadores de caminho GRAVÁVEL pelo usuário, onde malware costuma rodar.
+_USERWRITABLE_MARKERS = (
+    "\\appdata\\", "\\temp\\", "\\tmp\\", "\\programdata\\", "\\users\\public\\",
+    "\\downloads\\", "\\$recycle.bin\\", "\\perflogs\\", "\\windows\\temp\\",
+)
+# Emissores de assinatura tratados como confiáveis (prefixo do nome, minúsculo).
+_TRUSTED_PUBLISHERS = ("microsoft", "windows")
+
+
+def _norm_path(p) -> str:
+    return str(p or "").replace("/", "\\").lower()
+
+
+def _is_system_path(path) -> bool:
+    p = _norm_path(path)
+    return bool(p) and p.startswith(_SYSTEM_PATH_PREFIXES) \
+        and not any(m in p for m in ("\\temp\\", "\\tasks\\"))
+
+
+def _is_userwritable_path(path) -> bool:
+    p = _norm_path(path)
+    return any(m in p for m in _USERWRITABLE_MARKERS)
+
+
+def _signature_state(view: dict) -> str:
+    """'trusted' | 'untrusted' | 'unknown'. 'unknown' quando o log não traz assinatura
+    (config do Sysmon sem verificação) — nunca vira 'untrusted' por ausência."""
+    signed = view.get("signed")
+    status = str(view.get("signature_status") or "").strip().lower()
+    publisher = str(view.get("signature") or "").strip().lower()
+    if signed is None and not status and not publisher:
+        return "unknown"
+    if signed is False or (status and status != "valid"):
+        return "untrusted"
+    if signed is True and (not status or status == "valid"):
+        if publisher and not publisher.startswith(_TRUSTED_PUBLISHERS):
+            return "untrusted"          # assinado, mas por emissor não confiável
+        return "trusted"
+    return "unknown"
+
 
 @dataclass
 class RuleHit:
@@ -114,13 +159,18 @@ def event_view_from_silver(s: dict) -> dict:
         "event_id": eid,
         "category": s.get("event_category") or _EVENT_ID_CATEGORY.get(eid) or s.get("log_source"),
         "image_name": s.get("image_name") or _basename(s.get("image_path")),
+        "image_path": s.get("image_path"),
         "command_line": s.get("command_line"),
         "target_image": s.get("target_image"),
         "granted_access": s.get("granted_access"),
         "registry_target_object": s.get("registry_target_object"),
+        "registry_details": s.get("registry_details"),
         "target_filename": s.get("target_filename"),
         "logon_type": s.get("logon_type"),
         "destination_ip": s.get("destination_ip"),
+        "signed": s.get("signed"),
+        "signature": s.get("signature"),
+        "signature_status": s.get("signature_status"),
         "script_block_text": s.get("script_block_text"),
         "unmapped_json": s.get("unmapped_json"),
     }
@@ -131,10 +181,15 @@ def event_view_from_step(st) -> dict:
     informativo do evento está condensado em `artifact` conforme a categoria."""
     cat = st.category or ""
     art = st.artifact
+    # image_path/signed vêm do Step quando a Gold os carrega (correlate.py); caem para
+    # None nos Steps antigos, e aí as regras de caminho/assinatura simplesmente não casam.
     v = {"event_id": st.event_id, "category": cat, "image_name": st.image_name,
+         "image_path": getattr(st, "image_path", None),
          "command_line": None, "target_image": None, "granted_access": None,
-         "registry_target_object": None, "target_filename": None, "logon_type": None,
-         "destination_ip": None, "destination_port": None,
+         "registry_target_object": None, "registry_details": None, "target_filename": None,
+         "logon_type": None, "destination_ip": None, "destination_port": None,
+         "signed": getattr(st, "signed", None),
+         "signature_status": getattr(st, "signature_status", None), "signature": None,
          "script_block_text": None, "unmapped_json": None}
     if cat.startswith("network"):
         parts = str(art).split(":") if art else []
@@ -151,6 +206,8 @@ def event_view_from_step(st) -> dict:
         v["script_block_text"] = art
     else:                                  # process_create/service_install/genérico
         v["command_line"] = art
+        if not v["image_path"] and art and "\\" in str(art):
+            v["image_path"] = str(art).strip('"').split('"')[0]
     return v
 
 
@@ -165,6 +222,20 @@ def _split_op(key: str) -> tuple[str, str]:
 
 
 def _match_predicate(view: dict, key: str, spec) -> tuple[bool, object]:
+    # predicados especiais de caminho/assinatura (semântica, não texto cru)
+    if key == "image_userwritable":
+        p = view.get("image_path")
+        return (_is_userwritable_path(p) == bool(spec)), (p if p else None)
+    if key == "image_system":
+        p = view.get("image_path")
+        return (_is_system_path(p) == bool(spec)), (p if p else None)
+    if key == "signed":
+        st = _signature_state(view)
+        if spec:                                   # signed: true  → exige confiável
+            return st == "trusted", view.get("signature")
+        return st == "untrusted", (view.get("signature_status") or view.get("signature")
+                                   or "unsigned")   # signed: false → exige NÃO-confiável explícito
+
     field_name, op = _split_op(key)
     val = view.get(field_name)
     if val is None:
@@ -342,6 +413,19 @@ def _benign_signals(views: list[dict]) -> list[str]:
         sig.append("Nenhum download por LOLBin nem PowerShell codificado.")
     if {"process_create", "powershell_pipeline", "powershell_script_block"} & cats:
         sig.append("Execução de shell/processo sem ofuscação, codificação ou LOLBin de proxy.")
+
+    # atestação de CAMINHO: todos os executáveis rodaram de diretório de sistema?
+    exec_paths = [v.get("image_path") for v in views
+                  if v.get("category") == "process_create" and v.get("image_path")]
+    if exec_paths and all(_is_system_path(p) for p in exec_paths):
+        sig.append("Todos os executáveis rodaram de diretórios de sistema "
+                   "(nenhum de pasta gravável pelo usuário).")
+    # atestação de ASSINATURA: só quando o log traz assinatura (senão fica omissa, honesto)
+    states = [_signature_state(v) for v in views if v.get("category") == "process_create"]
+    if states and all(s == "trusted" for s in states):
+        sig.append("Todos os executáveis tinham assinatura digital válida de emissor confiável.")
+    elif any(s in ("trusted", "untrusted") for s in states):
+        pass                                # há assinatura no log, mas nem tudo é confiável
     return sig
 
 
