@@ -289,9 +289,6 @@ def deterministic_parse(raw: str, source_file: str | None = None) -> tuple[dict,
         if d:
             silver[col] = d.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
-    # DQ status default
-    silver["dq_status"] = "passed"
-
     # cobertura
     critical = [c for c in ("event_id", "hostname_nk", "record_number",
                             "event_utc_time") if silver.get(c) in (None, "")]
@@ -307,4 +304,29 @@ def deterministic_parse(raw: str, source_file: str | None = None) -> tuple[dict,
         missing_critical=critical,
         unmapped_keys=unmapped,
     )
+
+    # ZERO PERDA: toda chave bruta não-mapeada e não-ruído é preservada em unmapped_json
+    # (valor completo, sem truncar — o dict `unmapped` do report é só para diagnóstico).
+    full_unmapped = {k: v for k, v in rec.items()
+                     if k not in _CONSUMED and k not in schema.NOISE_KEYS
+                     and rec.get(k) not in (None, "", "-")}
+    silver["unmapped_json"] = json.dumps(full_unmapped, ensure_ascii=False) if full_unmapped else None
+
+    # DQ status: 'partial' sinaliza o que precisa do LLM/auditoria humana (ID desconhecido,
+    # Message não parseado, campo crítico ausente ou chave bruta sem coluna). Nada é
+    # descartado — o evento sempre vira uma linha; o flag diz onde o parse ficou incompleto.
+    if report.needs_llm:
+        silver["dq_status"] = "partial"
+        reasons = []
+        if report.unknown_event_id:
+            reasons.append("unmapped_event_type")
+        if not report.message_parsed:
+            reasons.append("message_unparsed")
+        if report.missing_critical:
+            reasons.append("missing_critical:" + "/".join(report.missing_critical))
+        if full_unmapped:
+            reasons.append("unmapped_keys:" + "/".join(sorted(full_unmapped)[:10]))
+        silver["dq_failed_rules"] = ";".join(reasons) or None
+    else:
+        silver["dq_status"] = "passed"
     return silver, report

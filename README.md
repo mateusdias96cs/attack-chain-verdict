@@ -21,6 +21,13 @@ Agente 1  parsing Bronze para Silver ......... 1 linha estruturada por evento
 Agente 2  correlação temporal ................ cadeias de eventos relacionados
       |
       v
+Portão    triagem determinística ............. tem característica de ataque?
+      |
+      +--- não ---> uso legítimo, com prova auditável (não gasta cota)
+      |
+      +--- sim --->
+      |
+      v
 Agente 3  recuperação de técnicas ATT&CK ..... candidatos por evento
       |
       v
@@ -29,8 +36,8 @@ Agente 4  veredito final ..................... cadeia narrada passo a passo
 
 | Agente | Diretório | O que faz | Motor |
 |---|---|---|---|
-| 1 | `silver_agent/` | Converte um log bruto em uma linha da camada Silver (cerca de 90 colunas), com normalização de PID, timestamp e hashes, e validação de qualidade | Parser determinístico por expressão regular. O modelo `llama-3.3-70b-versatile` (Groq) preenche apenas lacunas |
-| 2 | `temporal_agent/` | Materializa a camada Gold em DuckDB e monta cadeias de eventos relacionados por linha do tempo e por artefato compartilhado | Correlação determinística em SQL. O Groq apenas pontua a plausibilidade das cadeias do topo |
+| 1 | `silver_agent/` | Converte um log bruto em uma linha da camada Silver (cerca de 90 colunas), com normalização de PID, timestamp e hashes, e validação de qualidade. Cobre Sysmon, Security, PowerShell, WFP, WMI, BITS, RDP, Firewall, Defender e serviços do sistema, e nunca descarta um evento | Parser determinístico por expressão regular. O modelo `llama-3.3-70b-versatile` (Groq) preenche apenas lacunas |
+| 2 | `temporal_agent/` | Materializa a camada Gold em DuckDB, monta cadeias de eventos relacionados por linha do tempo e por artefato compartilhado, e aplica um portão de triagem determinístico que decide se a cadeia segue para o veredito | Correlação e triagem determinísticas, por SQL e por regras. O Groq é opcional e desligado por padrão |
 | 3 | `mitre-rag/` | Recupera as técnicas ATT&CK mais próximas da descrição de cada evento | Busca vetorial local com `multilingual-e5-small`, com chunking medido no tokenizer do próprio modelo. Nenhuma chamada externa |
 | 4 | `verdict_agent/` | Decide, entre os candidatos recuperados, qual técnica se aplica a cada evento e emite o relatório final | `gemini-flash-latest` com saída estruturada validada por Pydantic, apoiado por travessia de grafo no ATT&CK |
 
@@ -49,6 +56,49 @@ Três garantias importantes do desenho:
    inválido que não aponta a causa real. Quando a resposta bate no teto, o agente falha
    com uma mensagem que diz exatamente isso. Uma cadeia de quatro passos consome cerca de
    600 tokens de saída, então a folga é larga.
+4. **Nenhum evento é descartado.** O parser cobre as famílias de log relevantes do
+   Windows por identificador e por canal, e todo evento vira uma linha da camada Silver,
+   inclusive tipos desconhecidos. O que não tem coluna própria é preservado inteiro na
+   coluna `unmapped_json`, e o registro recebe `dq_status = partial` para deixar
+   explícito onde o parse ficou incompleto. A cobertura semântica de cada tipo é
+   incremental, mas a preservação do dado bruto é total.
+
+## Triagem determinística antes do veredito
+
+Nem todo log é ataque, e o modelo do Agente 4 tem cota diária. Para não gastar essa cota
+com atividade legítima, e para não empurrar um evento benigno para dentro de uma técnica
+só porque a busca sempre devolve a mais parecida, o Agente 2 tem um portão de triagem que
+roda em código puro, sem chamar modelo nenhum e sem custo de token.
+
+O portão consulta um conjunto de regras em `temporal_agent/triage_rules.yaml`, no estilo
+das regras Sigma: cada regra descreve um padrão de ataque, aponta a técnica ATT&CK
+correspondente e tem um nível de força. A decisão é simples e explicável:
+
+- Uma regra **forte** que dispara já escala a cadeia para o veredito. Exemplos: acesso à
+  memória do LSASS, deleção de cópias de sombra, download por utilitário do sistema,
+  PowerShell codificado, nome de arquivo mascarado.
+- **Dois sinais fracos** que se corroboram na mesma cadeia também escalam. Um sinal fraco
+  isolado, como a simples criação de uma tarefa agendada, não escala, porque é comum em
+  uso legítimo.
+- Se nada dispara, a cadeia é declarada **uso legítimo**, com uma prova auditável: a lista
+  do que foi verificado e não apareceu (sem mascaramento, sem conexão a porta atípica, sem
+  acesso ao LSASS, sem download suspeito). O humano lê essa prova e confere se a conclusão
+  faz sentido.
+
+O portão tem recall limitado ao conjunto de regras: um ataque novo, fora do repertório,
+passaria como legítimo. Para reduzir esse risco sem estourar a cota, uma pequena amostra
+das cadeias declaradas legítimas é sorteada de forma determinística e enviada mesmo assim
+ao veredito, como auditoria de segurança.
+
+Uma regra ampla demais custa caro. A primeira versão da regra de comando e controle
+marcava qualquer processo que abrisse conexão externa, e isso fez quase tudo escalar,
+porque tráfego normal do Windows, como o cliente de e-mail e tarefas de segundo plano,
+conecta o tempo todo a servidores de nuvem na porta 443. A regra foi rebaixada para sinal
+fraco e passou a considerar a porta: conexões nas portas de serviço comuns não contam, e
+uma conexão a porta atípica logo após a criação de um processo conta. Medido na amostra de
+40 mil eventos do conjunto APT29, das cadeias montadas apenas a cadeia de ataque real
+escala, o tráfego legítimo é declarado legítimo com prova, e o portão não faz nenhuma
+chamada de modelo.
 
 ## Dados de entrada
 
@@ -180,19 +230,25 @@ recuperação:
 # Agente 1 sem gastar tokens (apenas o caminho determinístico)
 .venv/bin/python -m silver_agent.cli --random dadosdia1.json --no-llm
 
-# Agente 2: monta a camada Gold sobre uma amostra e correlaciona
+# Agente 2: monta a camada Gold, correlaciona e aplica o portão de triagem
 .venv/bin/python -m temporal_agent.cli --sample 40000
 
 # Agente 2 sobre o conjunto completo de 783 mil eventos
 .venv/bin/python -m temporal_agent.cli --rebuild
 
+# Agente 2 escalando também para o Groq nas cadeias que passam pelo portão
+.venv/bin/python -m temporal_agent.cli --sample 40000 --groq
+
 # Agente 3: consulta direta ao índice de técnicas
 cd mitre-rag && ./.venv/bin/python query.py "logon com credenciais válidas de domínio" --k 3
 ```
 
-Os Agentes 1 e 2 aceitam `--dry-run`, que estima o consumo de tokens sem fazer a
-chamada, e `--no-llm`, que executa apenas a parte determinística. O Agente 4 sempre
-chama o Gemini, porque a decisão final é a função dele.
+O Agente 1 aceita `--dry-run`, que estima o consumo de tokens sem fazer a chamada, e
+`--no-llm`, que executa apenas a parte determinística. O Agente 2 já roda determinístico
+por padrão, com o portão de triagem no lugar do modelo, e só chama o Groq com `--groq`.
+Ainda no Agente 2, `--no-triage` desliga o portão e escala tudo, como comparação, e
+`--sample-budget N` controla quantas cadeias legítimas são sorteadas para auditoria. O
+Agente 4 sempre chama o Gemini, porque a decisão final é a função dele.
 
 ### Orquestração visual
 
@@ -213,11 +269,12 @@ porque o nó do Agente 3 carrega o modelo de embedding. Detalhes em
 .venv/bin/python -m pytest tests/ -q
 ```
 
-São 49 testes e nenhum deles chama serviço externo. A execução leva cerca de quatro
+São 62 testes e nenhum deles chama serviço externo. A execução leva cerca de quatro
 minutos, porque `tests/test_gold_search.py` reconstrói a camada Gold inteira em
 DuckDB a partir dos 783 mil eventos reais e valida integridade referencial, unicidade de
 grão, reconciliação de contagem, a cadeia de validade SCD tipo 2 e as consultas que um
-analista realmente executa.
+analista realmente executa. O portão de triagem tem cobertura própria em
+`tests/test_triage.py`, com um caso positivo e um caso benigno por regra.
 
 Testes de retrieval do Agente 3 rodam no ambiente próprio:
 
@@ -356,3 +413,13 @@ consulta, todos corrigidos e registrados em `docs/audit/lakehouse_audit.md`.
 - A avaliação usa 15 casos, o que é pouco para separar variação real de ruído. Diferenças
   de um caso entre execuções não sustentam conclusão, ainda mais porque o modelo do
   Agente 4 não é determinístico.
+- O portão de triagem reconhece apenas os padrões descritos no seu conjunto de regras. Um
+  ataque fora desse repertório passa como legítimo, e a amostragem das cadeias legítimas
+  reduz esse risco, mas é amostra, não cobertura total. A prova de legitimidade atesta que
+  os padrões de ataque conhecidos não apareceram, não que a atividade seja segura em
+  termos absolutos.
+- A prova de legitimidade se apoia no que o evento carrega e na ausência de padrões
+  conhecidos, não na verificação de assinatura digital nem na conferência do caminho de
+  instalação do binário. Persistência apontando para um binário assinado no caminho
+  esperado e persistência apontando para um binário em pasta gravável pelo usuário ainda
+  são tratadas pelo mesmo sinal fraco.

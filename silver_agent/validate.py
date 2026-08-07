@@ -31,6 +31,9 @@ def validate(silver: dict) -> list[str]:
     if ch and ch not in schema.KNOWN_CHANNELS:
         failed.append("channel_in_known_set")
 
+    if silver.get("unmapped_json"):                  # zero-perda: aviso, nunca descarte
+        failed.append("unmapped_fields_present")
+
     pg = silver.get("process_guid")                  # #10 warning
     if pg and not _GUID_RE.match(str(pg)):
         failed.append("process_guid_format")

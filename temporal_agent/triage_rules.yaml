@@ -1,0 +1,182 @@
+# Ruleset de triagem determinística (estilo Sigma) — Agente 2.
+#
+# Cada regra decide, em código a 0 tokens, se um evento/cadeia tem CARACTERÍSTICA de
+# ataque. Se qualquer regra 'high' dispara (ou 'medium' com corroboração), a cadeia é
+# ESCALADA ao veredito LLM; se nada dispara, a cadeia é declarada legítima com prova
+# auditável (o motor lista o que foi checado). Ver temporal_agent/triage.py.
+#
+# Campos de uma regra:
+#   id            identificador estável
+#   title         descrição humana
+#   attack_id     técnica MITRE ATT&CK correspondente
+#   tactic        tática ATT&CK
+#   level         high  = escala sozinha
+#                 medium= só escala se OUTRA regra também disparar na mesma cadeia
+#   scope         event = casa contra um evento isolado
+#                 chain = casa contra a sequência (relações entre eventos)
+#   match         mapa de predicados; TODOS precisam casar (AND). Operadores por sufixo:
+#                   <campo>            igualdade OU pertence-ao-conjunto (lista)
+#                   <campo>_contains   substring case-insensitive (lista = qualquer uma)
+#                   <campo>_regex      regex case-insensitive
+#                   <campo>_mask       inteiro; casa se (valor & mask) == mask
+#                 Campos de evento: image_name, command_line, target_image, granted_access,
+#                   registry_target_object, target_filename, category, logon_type,
+#                   destination_ip, script_block_text, unmapped_json, event_id.
+#   chain_match   (scope=chain) predicados sobre a sequência:
+#                   sequence: [catA, catB]  catA seguido de catB (ordem temporal)
+#                   external_dest: true     algum destino de rede é IP externo/roteável
+#                   within_seconds: N       catA→catB dentro de N segundos
+
+- id: CRED_DUMP_LSASS
+  title: Acesso à memória do LSASS (roubo de credenciais)
+  attack_id: T1003.001
+  tactic: Credential Access
+  level: high
+  scope: event
+  match:
+    category: process_access
+    target_image_contains: ["lsass.exe"]
+
+- id: INHIBIT_RECOVERY_SHADOWS
+  title: Deleção de cópias de sombra (precursor de ransomware)
+  attack_id: T1490
+  tactic: Impact
+  level: high
+  scope: event
+  match:
+    image_name: [vssadmin.exe, wmic.exe, wbadmin.exe, bcdedit.exe]
+    command_line_contains: ["delete shadows", "shadowcopy delete", "delete catalog",
+                            "recoveryenabled no", "resize shadowstorage"]
+
+- id: PERSIST_SCHEDULED_TASK
+  title: Criação de tarefa agendada
+  attack_id: T1053.005
+  tactic: Persistence
+  level: medium
+  scope: event
+  match:
+    image_name: [schtasks.exe]
+    command_line_contains: ["/create", " -create"]
+
+- id: PERSIST_RUN_KEY
+  title: Persistência via chave Run do Registro
+  attack_id: T1547.001
+  tactic: Persistence
+  level: medium
+  scope: event
+  match:
+    registry_target_object_regex: ["\\\\CurrentVersion\\\\Run"]
+
+- id: PERSIST_SERVICE_INSTALL
+  title: Instalação de novo serviço do Windows
+  attack_id: T1543.003
+  tactic: Persistence
+  level: medium
+  scope: event
+  match:
+    event_id: [7045, 4697]
+
+- id: INGRESS_LOLBIN_DOWNLOAD
+  title: Download via LOLBin (certutil/bitsadmin)
+  attack_id: T1105
+  tactic: Command and Control
+  level: high
+  scope: event
+  match:
+    image_name: [certutil.exe, bitsadmin.exe]
+    command_line_contains: ["-urlcache", "/urlcache", "-transfer", "/transfer",
+                            "http://", "https://"]
+
+- id: DEFENSE_EVASION_MASQUERADE
+  title: Mascaramento de nome de arquivo (RTLO / extensão .scr)
+  attack_id: T1036
+  tactic: Defense Evasion
+  level: high
+  scope: event
+  match:
+    image_name_regex: ["\\u202e", "\\.scr$"]
+
+- id: EXEC_ENCODED_POWERSHELL
+  title: PowerShell com comando codificado/ofuscado
+  attack_id: T1059.001
+  tactic: Execution
+  level: high
+  scope: event
+  match:
+    command_line_regex: ["-enc(odedcommand)?\\b", "-e\\s+[A-Za-z0-9+/=]{40,}",
+                         "frombase64string", "-nop.*-w\\s*hidden"]
+
+- id: PROXY_EXEC_SIGNED_BINARY
+  title: Execução por proxy via binário assinado (regsvr32/rundll32/mshta)
+  attack_id: T1218
+  tactic: Defense Evasion
+  level: medium
+  scope: event
+  match:
+    image_name: [regsvr32.exe, rundll32.exe, mshta.exe]
+    command_line_regex: ["http[s]?://", "javascript:", "scrobj", "\\.hta", "url\\.dll"]
+
+- id: EXEC_WMIC_PROCESS_CALL
+  title: Execução remota/local via WMIC process call create
+  attack_id: T1047
+  tactic: Execution
+  level: high
+  scope: event
+  match:
+    image_name: [wmic.exe]
+    command_line_contains: ["process call create"]
+
+- id: DISCOVERY_SYSTEM_UTILS
+  title: Reconhecimento de contas/sistema via utilitários nativos
+  attack_id: T1087
+  tactic: Discovery
+  level: medium
+  scope: event
+  match:
+    image_name: [whoami.exe, net.exe, net1.exe, nltest.exe, quser.exe, hostname.exe]
+
+- id: COLLECTION_ARCHIVE_STAGING
+  title: Compactação de dados coletados para exfiltração
+  attack_id: T1560.001
+  tactic: Collection
+  level: medium
+  scope: event
+  match:
+    image_name: [rar.exe, winrar.exe, 7z.exe, 7za.exe]
+
+# C2 por rede é sinal FRACO isolado: tráfego web/AD/e-mail legítimo do Windows
+# (backgroundTaskHost, Outlook, Store) conecta o tempo todo a IPs de nuvem na 443/80.
+# Por isso é `medium` (precisa corroboração) e exclui as portas de serviço padrão —
+# senão inunda o escalonamento de falso positivo (medido no dataset APT29).
+- id: C2_SPAWN_THEN_EXTERNAL
+  title: Processo criado seguido de conexão a IP externo em porta não-web (indício de C2)
+  attack_id: T1071
+  tactic: Command and Control
+  level: medium
+  scope: chain
+  chain_match:
+    sequence: [process_create, network_connect]
+    external_dest: true
+    exclude_ports: [80, 443, 53]
+    within_seconds: 120
+
+- id: C2_NONSTANDARD_PORT
+  title: Conexão a porta não-padrão logo após criação de processo (beacon em porta atípica)
+  attack_id: T1571
+  tactic: Command and Control
+  level: medium
+  scope: chain
+  chain_match:
+    sequence: [process_create, network_connect]
+    nonstandard_port: true
+    within_seconds: 120
+
+- id: EXEC_DROP_THEN_RUN
+  title: Arquivo dropado e depois executado
+  attack_id: T1204
+  tactic: Execution
+  level: medium
+  scope: chain
+  chain_match:
+    sequence: [file_create, process_create]
+    within_seconds: 600

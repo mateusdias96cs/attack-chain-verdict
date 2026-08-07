@@ -57,6 +57,12 @@ def build_prompt(handoff: dict, use_ttp_graph: bool = USE_TTP_GRAPH) -> str:
             f"PRIOR TEMPORAL SCREEN (agent 2): verdict={prior.get('verdict')} "
             f"plausibility={prior.get('plausibility')} "
             f"tactics={prior.get('likely_tactics')}")
+        # evidência DETERMINÍSTICA do portão de triagem (regras que dispararam), quando
+        # a triagem em código foi a fonte — dá ao modelo o porquê objetivo do escalonamento.
+        for fr in (prior.get("fired_rules") or []):
+            lines.append(
+                f"  · deterministic rule {fr.get('rule_id')} [{fr.get('level')}] "
+                f"→ {fr.get('attack_id')} | evidence: {fr.get('evidence')}")
     lines.append(f"EVENTS ({len(handoff.get('events', []))}), in chronological order:")
     for ev in handoff.get("events", []):
         idx = ev.get("index")

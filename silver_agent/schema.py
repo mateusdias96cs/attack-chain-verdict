@@ -58,6 +58,8 @@ SILVER_COLUMNS: list[str] = [
     "script_block_text", "script_block_id", "message_number", "message_total",
     # genérico / lineage
     "message_raw", "rule_name", "severity", "event_result", "opcode",
+    # zero-perda: JSON de toda chave bruta não-mapeada e não-ruído (auditoria)
+    "unmapped_json",
     # metadados DQ
     "dq_status", "dq_failed_rules",
 ]
@@ -91,7 +93,9 @@ COALESCE_MAP: dict[str, list[str]] = {
     "target_domain": ["TargetDomainName"],
     # processo ator (Sysmon). EventID 10 usa Source* como ator.
     "process_guid": ["ProcessGuid", "SourceProcessGUID", "SourceProcessGuid"],
-    "image_path": ["Image", "SourceImage"],
+    # Image/SourceImage (Sysmon); ImagePath/ServiceFileName = binário do serviço
+    # instalado (System 7045 / Security 4697) — mesmo papel de "executável do evento".
+    "image_path": ["Image", "SourceImage", "ImagePath", "ServiceFileName"],
     "company": ["Company"],
     "product": ["Product"],
     "description": ["Description"],
@@ -164,29 +168,62 @@ COALESCE_MAP: dict[str, list[str]] = {
 SYSMON_EVENT_IDS = {1, 3, 5, 7, 8, 9, 10, 11, 12, 13, 17, 18, 22, 23}
 WFP_EVENT_IDS = {5156, 5158, 5447}
 POWERSHELL_EVENT_IDS = {400, 403, 600, 800, 4103, 4104}
-# Windows Security = todo o resto (4624, 4625, 4656, 4658, 4663, 4688, ...)
+# Provedores adicionais relevantes de segurança. Os IDs de baixo número COLIDEM com o
+# Sysmon (BITS 3 vs Sysmon 3; TerminalServices 24/25 vs Sysmon), então derive_log_source
+# identifica esses provedores pelo CANAL, não pelo event_id.
+SYSTEM_EVENT_IDS = {7045, 7040, 7036}          # serviço: instalação / mudança / estado
+WMI_EVENT_IDS = {5857, 5858, 5859, 5860, 5861}
+DEFENDER_EVENT_IDS = {1006, 1015, 1116, 1117, 5001, 5007}
+RDP_EVENT_IDS = {1149, 21, 24, 25}
+FIREWALL_EVENT_IDS = {2004, 2005, 2006, 2009, 2033}
+# Windows Security = todo o resto (4624, 4625, 4656, 4658, 4663, 4688, 4697, ...)
+
+# Fragmentos de nome de canal → log_source (checados ANTES do event_id p/ evitar colisão).
+_CHANNEL_SOURCE = (
+    ("WMI-Activity", "wmi"),
+    ("Bits-Client", "bits"),
+    ("TerminalServices", "rdp"),
+    ("Windows Firewall", "firewall"),
+    ("Windows Defender", "defender"),
+)
 
 KNOWN_EVENT_IDS = (
     SYSMON_EVENT_IDS | WFP_EVENT_IDS | POWERSHELL_EVENT_IDS |
+    SYSTEM_EVENT_IDS | WMI_EVENT_IDS | DEFENDER_EVENT_IDS |
+    RDP_EVENT_IDS | FIREWALL_EVENT_IDS |
     {4624, 4625, 4634, 4656, 4658, 4663, 4670, 4672, 4673,
-     4688, 4689, 4690, 4703, 4627, 5140, 5145}
+     4688, 4689, 4690, 4697, 4703, 4627, 5140, 5145}
 )
 
 
 def derive_log_source(event_id: int | None, channel: str | None) -> str:
+    ch = channel or ""
+    # 1) provedores identificados pelo CANAL (event IDs colidem com o Sysmon)
+    for frag, src in _CHANNEL_SOURCE:
+        if frag in ch:
+            return src
+    # 2) provedores por event_id / sufixo de canal
     if event_id in WFP_EVENT_IDS:
         return "wfp"
-    if event_id in SYSMON_EVENT_IDS or (channel or "").endswith("Sysmon/Operational"):
+    if event_id in SYSMON_EVENT_IDS or ch.endswith("Sysmon/Operational"):
         return "sysmon"
-    if event_id in POWERSHELL_EVENT_IDS or "PowerShell" in (channel or ""):
+    if event_id in POWERSHELL_EVENT_IDS or "PowerShell" in ch:
         return "powershell"
+    if event_id in SYSTEM_EVENT_IDS or ch == "System":
+        return "system"
     return "windows_security"
 
 
 # Canais conhecidos (DQ rule #9)
 KNOWN_CHANNELS = {
-    "Microsoft-Windows-Sysmon/Operational", "Security",
+    "Microsoft-Windows-Sysmon/Operational", "Security", "System",
     "Windows PowerShell", "Microsoft-Windows-PowerShell/Operational",
+    "Microsoft-Windows-WMI-Activity/Operational",
+    "Microsoft-Windows-Bits-Client/Operational",
+    "Microsoft-Windows-TerminalServices-RemoteConnectionManager/Operational",
+    "Microsoft-Windows-TerminalServices-LocalSessionManager/Operational",
+    "Microsoft-Windows-Windows Firewall With Advanced Security/Firewall",
+    "Microsoft-Windows-Windows Defender/Operational",
 }
 
 # Campos do Windows que NÃO possuem coluna Silver correspondente (ruído de

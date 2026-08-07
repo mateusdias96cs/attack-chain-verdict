@@ -42,6 +42,7 @@ class PipelineState(TypedDict, total=False):
     entity: Annotated[str, _keep_last]
     silver_events: Annotated[list[dict], _keep_last]   # saída Agente 1
     chain: Annotated[dict, _keep_last]                 # saída Agente 2 (linha do tempo única)
+    triage: Annotated[dict, _keep_last]                # decisão do PORTÃO determinístico
     handoff: Annotated[dict, _keep_last]               # saída Agente 3 (candidatos/evento)
     verdict: Annotated[dict, _keep_last]               # saída Agente 4 (veredito estruturado)
     report_text: Annotated[str, _keep_last]            # a mesma saída, já narrada para leitura
@@ -73,18 +74,69 @@ def agent1_silver(state: PipelineState) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------
-# Nó 2 — Agente 2 (Correlação temporal). Modo leve: linha do tempo única por tempo.
-# INVARIANTE: ordena por event_utc_time; source_file NUNCA é fronteira.
+# Nó 2 — Agente 2 (Correlação temporal + PORTÃO DE TRIAGEM). Modo leve: linha do tempo
+# única por tempo. INVARIANTE: ordena por event_utc_time; source_file NUNCA é fronteira.
+# O portão determinístico (0 tokens) decide se a cadeia escala ao veredito LLM ou é
+# declarada legítima — economizando cota do Gemini nos casos benignos.
 # --------------------------------------------------------------------------
 def agent2_temporal(state: PipelineState) -> dict[str, Any]:
+    from temporal_agent import triage as T
+
     chain = dict(state.get("chain") or {})
     events = list(chain.get("events") or [])
     events.sort(key=lambda e: e.get("time") or "")   # ordenação temporal única
     chain["events"] = events
     chain.setdefault("entity", state.get("entity"))
+
+    # PORTÃO: triagem determinística sobre os eventos silver (regras de escopo evento).
+    rules = T.load_rules()
+    silver = state.get("silver_events") or [{"time": e.get("time"), "raw": e.get("raw"),
+                                             **(e.get("silver") or {})} for e in events]
+    decision = T.triage_events(silver, rules, entity=chain.get("entity", "?"))
+    chain["prior_chain_verdict"] = decision.to_prior_verdict()
+
+    if decision.decision == "escalate":
+        msg = (f"escala ao veredito — regras: "
+               f"{', '.join(h.rule_id for h in decision.fired)} {decision.attack_ids}")
+    else:
+        msg = "legítima (nenhuma regra disparou) — não gasta cota do Gemini"
     return {
         "chain": chain,
-        "trace": [f"agent2_temporal: cadeia de {len(events)} passos ordenada numa linha do tempo única"],
+        "triage": {"decision": decision.decision,
+                   "attack_ids": decision.attack_ids, "tactics": decision.tactics,
+                   "fired_rules": [h.rule_id for h in decision.fired],
+                   "benign_evidence": decision.benign_evidence},
+        "trace": [f"agent2_temporal: {len(events)} passos numa linha do tempo única; portão: {msg}"],
+    }
+
+
+def route_after_triage(state: PipelineState) -> str:
+    """Aresta condicional: só escala ao RAG/Gemini se o portão apontou característica de
+    ataque. Cadeia legítima curto-circuita para o relatório benigno (0 tokens de LLM)."""
+    return "escalate" if (state.get("triage") or {}).get("decision") == "escalate" else "clear"
+
+
+# --------------------------------------------------------------------------
+# Nó alternativo — relatório de USO LEGÍTIMO com prova auditável (sem LLM).
+# --------------------------------------------------------------------------
+def agent_legitimate(state: PipelineState) -> dict[str, Any]:
+    tri = state.get("triage") or {}
+    be = tri.get("benign_evidence") or {}
+    lines = [f"VEREDITO: USO LEGÍTIMO — {state.get('entity', '?')}",
+             "Nenhuma regra de ataque disparou no portão determinístico (0 tokens de LLM).",
+             ""]
+    if be.get("medium_uncorroborated"):
+        lines.append("Sinais fracos (medium) sem corroboração, insuficientes para escalar: "
+                     + ", ".join(be["medium_uncorroborated"]))
+    lines.append("Prova auditável (indicadores de ataque conhecidos ausentes):")
+    for ps in be.get("positive_signals", []):
+        lines.append(f"  - {ps}")
+    text = "\n".join(lines)
+    return {
+        "verdict": {"overall_verdict": "benign", "source": "deterministic_triage",
+                    "benign_evidence": be},
+        "report_text": text,
+        "trace": ["agent_legitimate: veredito benigno emitido sem gastar cota do Gemini"],
     }
 
 
@@ -137,14 +189,19 @@ def build_graph():
     g = StateGraph(PipelineState)
     g.add_node("agent1_silver", agent1_silver)
     g.add_node("agent2_temporal", agent2_temporal)
+    g.add_node("agent_legitimate", agent_legitimate)
     g.add_node("agent3_rag", agent3_rag)
     g.add_node("agent4_verdict", agent4_verdict)
 
     g.add_edge(START, "agent1_silver")
     g.add_edge("agent1_silver", "agent2_temporal")
-    g.add_edge("agent2_temporal", "agent3_rag")
+    # PORTÃO: escala ao RAG/Gemini só se houver característica de ataque; senão vai
+    # direto ao relatório de legítimo (curto-circuito que economiza cota).
+    g.add_conditional_edges("agent2_temporal", route_after_triage,
+                            {"escalate": "agent3_rag", "clear": "agent_legitimate"})
     g.add_edge("agent3_rag", "agent4_verdict")
     g.add_edge("agent4_verdict", END)
+    g.add_edge("agent_legitimate", END)
     return g.compile()
 
 
